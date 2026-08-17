@@ -1,0 +1,7 @@
+[toolchain]
+# Pinned exactly, not "stable": ADR-0004 targets bit-exact reproducibility for a
+# given build, and a floating toolchain silently changes codegen under that
+# contract. Bumping this is a deliberate task with a full determinism re-verify.
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

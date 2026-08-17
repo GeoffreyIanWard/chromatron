@@ -1,0 +1,117 @@
+[workspace]
+resolver = "3"
+members = [
+    # ---- sim side: nothing here may depend on anything below the firewall ----
+    "crates/cx-core",
+    "crates/cx-module",
+    "crates/cx-ecs",
+    "crates/cx-time",
+    "crates/cx-fields",
+    "crates/cx-worldgen",
+    "crates/cx-edit",
+    "crates/cx-solvers",
+    "crates/cx-spatial",
+    "crates/cx-agents",
+    "crates/cx-physics",
+    "crates/cx-lod",
+    "crates/cx-data",
+    "crates/cx-persist",
+    "crates/cx-diag",
+    "crates/cx-sim",
+    # ---- firewall ----
+    "crates/cx-render",
+    "crates/cx-view",
+    "crates/cx-present",
+    "crates/cx-audio",
+    "crates/cx-ui",
+    "crates/cx-app",
+    # ---- binaries ----
+    "apps/chromatron-game",
+    "apps/chromatron-cli",
+    "apps/chromatron-bench",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97.1"
+license = "UNLICENSED"
+publish = false
+
+[workspace.dependencies]
+# Sim-side. Versions are exact, not caret: ADR-0004 makes the build part of the
+# determinism contract, so a patch bump is a deliberate task with a re-verify.
+bevy_ecs = "=0.19.1"
+bevy_tasks = "=0.19.1"
+glam = "=0.33.3"
+thiserror = "=2.0.20"
+tracing = "=0.1.44"
+indexmap = "=2.14.0"
+toml = "=1.1.4"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+
+# Apps and tooling only.
+anyhow = "=1.0.100"
+clap = { version = "=4.5.52", features = ["derive"] }
+tracing-subscriber = { version = "=0.3.20", features = ["env-filter"] }
+criterion = "=0.7.0"
+cargo_metadata = "=0.23.0"
+
+# Internal.
+cx-core = { path = "crates/cx-core" }
+cx-module = { path = "crates/cx-module" }
+cx-ecs = { path = "crates/cx-ecs" }
+cx-time = { path = "crates/cx-time" }
+cx-fields = { path = "crates/cx-fields" }
+cx-worldgen = { path = "crates/cx-worldgen" }
+cx-edit = { path = "crates/cx-edit" }
+cx-solvers = { path = "crates/cx-solvers" }
+cx-spatial = { path = "crates/cx-spatial" }
+cx-agents = { path = "crates/cx-agents" }
+cx-physics = { path = "crates/cx-physics" }
+cx-lod = { path = "crates/cx-lod" }
+cx-data = { path = "crates/cx-data" }
+cx-persist = { path = "crates/cx-persist" }
+cx-diag = { path = "crates/cx-diag" }
+cx-sim = { path = "crates/cx-sim" }
+cx-render = { path = "crates/cx-render" }
+cx-view = { path = "crates/cx-view" }
+cx-present = { path = "crates/cx-present" }
+cx-audio = { path = "crates/cx-audio" }
+cx-ui = { path = "crates/cx-ui" }
+cx-app = { path = "crates/cx-app" }
+
+# Opted into by sim crates via `[lints] workspace = true`. Crates below the
+# firewall and under apps/ deliberately do not opt in: panicking is fine in
+# tools, tests, and benchmarks (03-conventions.md).
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+float_cmp = "deny"
+# Determinism: no unordered iteration in sim code (ADR-0004). The types
+# themselves are named in clippy.toml.
+disallowed_types = "deny"
+disallowed_methods = "deny"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+debug = 1
+
+# Benchmarks and determinism checks are meaningless on an unoptimized build,
+# and M0 asks for both constantly.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.bench]
+lto = "thin"
+codegen-units = 1

@@ -1,0 +1,20 @@
+[package]
+name = "chromatron-bench"
+description = "Criterion benchmarks. Every benchmark here is a CI gate in docs/bench/baselines.md."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+criterion.workspace = true
+cx-core.workspace = true
+cx-ecs.workspace = true
+cx-fields.workspace = true
+cx-module.workspace = true
+
+[lints.rust]
+unsafe_code = "warn"

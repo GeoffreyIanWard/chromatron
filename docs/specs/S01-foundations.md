@@ -12,6 +12,20 @@ milestone: M0
 
 Primitives every other crate builds on. Small, boring, and load-bearing; get it wrong and every spec inherits the mistake.
 
+## Toolchain pins
+
+Pinned exactly rather than by range, because `ADR-0004` makes the build part of the
+determinism contract. Each bump is a deliberate task ending in a determinism re-verify
+(threads 1/4/16 plus subprocess), not a routine dependency update.
+
+| Pin | Value | Notes |
+|---|---|---|
+| Rust | `1.97.1` | `rust-toolchain.toml` at the repo root; exact channel, never `stable`. Edition 2024. |
+| `bevy_ecs` | `=0.19.1` | Exact requirement, per `ADR-0001`. Requires Rust ≥ 1.95. |
+
+No MSRV window is published — this is not a library for other people's projects
+(`01-scope.md`), so the pinned version *is* the supported version.
+
 ## Requirements
 
 - `Handle<T>` — generational index (`u32` index + `u32` generation), `Copy`, 8 bytes, no pointer. Backed by a slot map with free-list reuse.
