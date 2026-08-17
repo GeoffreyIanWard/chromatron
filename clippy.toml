@@ -1,0 +1,17 @@
+# Determinism rules from 03-conventions.md / ADR-0004, enforced mechanically.
+#
+# These apply to every crate compiled in the workspace, but only crates that opt
+# into `[lints] workspace = true` (the sim side) deny them. Below the firewall
+# they are not enabled, because view-world code is rebuilt from scratch each
+# frame and its iteration order cannot influence sim state.
+
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "iteration order is unspecified and varies per process; use IndexMap, BTreeMap, or a sorted Vec (ADR-0004)" },
+    { path = "std::collections::HashSet", reason = "iteration order is unspecified and varies per process; use IndexSet, BTreeSet, or a sorted Vec (ADR-0004)" },
+]
+
+disallowed-methods = [
+    { path = "std::time::SystemTime::now", reason = "wall-clock time must never enter sim logic; the canonical clock is Tick(u64) (03-conventions.md)" },
+    { path = "std::time::Instant::now", reason = "wall-clock time must never enter sim logic; measure via cx-diag instead (03-conventions.md)" },
+    { path = "std::thread::current", reason = "thread identity must not influence sim results (ADR-0004)" },
+]

@@ -1,7 +1,7 @@
 ---
 id: S01
 title: Foundations
-status: not started
+status: implemented
 depends_on: []
 provides: [ids, handles, arenas, rng, error-types, math, config, logging]
 crates_touched: [cx-core]
@@ -11,6 +11,20 @@ milestone: M0
 # S01 — Foundations
 
 Primitives every other crate builds on. Small, boring, and load-bearing; get it wrong and every spec inherits the mistake.
+
+## Toolchain pins
+
+Pinned exactly rather than by range, because `ADR-0004` makes the build part of the
+determinism contract. Each bump is a deliberate task ending in a determinism re-verify
+(threads 1/4/16 plus subprocess), not a routine dependency update.
+
+| Pin | Value | Notes |
+|---|---|---|
+| Rust | `1.97.1` | `rust-toolchain.toml` at the repo root; exact channel, never `stable`. Edition 2024. |
+| `bevy_ecs` | `=0.19.1` | Exact requirement, per `ADR-0001`. Requires Rust ≥ 1.95. |
+
+No MSRV window is published — this is not a library for other people's projects
+(`01-scope.md`), so the pinned version *is* the supported version.
 
 ## Requirements
 
@@ -39,4 +53,18 @@ No allocator work, no custom collections beyond the arena, no serialization (tha
 
 ## Open questions
 
-- Whether `Id` interning must survive across saves or can be rebuilt at load. Leaning rebuild-at-load, which requires saves to store strings not `Id`s. Confirm against S13.
+- ~~Whether `Id` interning must survive across saves or can be rebuilt at load.~~ Resolved
+  at implementation: rebuild-at-load, and the type system now enforces it. `Interner`
+  *stages* strings in any order and `freeze()` assigns ids by sorted position, so no `Id`
+  exists before the full set is known and an order-dependent id cannot be observed. Saves
+  must therefore store strings, not `Id`s — **confirm against S13 before persistence work
+  begins.** `SymbolTable::content_hash` exists for a load to verify it interned the same set.
+- `hash_position`'s cross-architecture criterion is only half-testable locally. The pinned
+  vector in `hash.rs` asserts stability for a given build; the x86-64/aarch64 equality
+  claim needs the same test running on both in CI. The matrix runs Linux, Windows, and
+  macOS, but all on x86-64 except macOS — add an aarch64 runner before trusting that
+  criterion.
+- `Config` models values as a flat map of dotted keys, so a TOML array becomes a
+  comma-joined string. That suits lists of module ids and content paths, which is all S20
+  and S04 currently need. If a config ever needs an array of tables, this representation
+  is the thing to revisit.

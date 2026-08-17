@@ -1,0 +1,19 @@
+[package]
+name = "chromatron-cli"
+description = "Headless runner, batch sweeps, benchmarks, graph export (S21)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+cx-sim.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# apps/ may use anyhow and may panic (03-conventions.md).
+[lints.rust]
+unsafe_code = "warn"
