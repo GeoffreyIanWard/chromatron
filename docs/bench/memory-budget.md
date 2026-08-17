@@ -81,6 +81,15 @@ implemented yet (S06), so `memory_16_chunks_1m_entities` gates on four `f32` fie
 table above assumes `u8`, `u16`, and `f16`. If that gate ever fails, implementing
 quantization is the first lever — ahead of reducing `CELLS_PER_CHUNK_EDGE`.
 
+## Measured at M0
+
+Peak RSS 0.61 GiB for 16 chunks and 1,000,000 entities, against the 8 GiB min-spec budget —
+of which 514 MB is unquantized field storage for four `f32` fields.
+
+This is a floor rather than a validation. The M0 configuration carries four fields against
+the eleven in the table above, and 32 B of components per entity against the ~700 B assumed
+here. The budget is tested properly at M4, once solvers register their fields.
+
 ## Enforcement
 
 - CI runs every milestone benchmark under the min-spec profile with a hard RSS cap; exceeding it fails the build.
