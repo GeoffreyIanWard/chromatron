@@ -1,0 +1,9 @@
+/target
+**/*.rs.bk
+*.pdb
+
+# Disposable generated-block store (S07); never part of a save.
+/block-cache
+/.cache
+
+.DS_Store
