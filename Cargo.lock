@@ -386,6 +386,7 @@ dependencies = [
  "cx-ecs",
  "cx-fields",
  "cx-module",
+ "cx-view",
 ]
 
 [[package]]
@@ -717,6 +718,10 @@ version = "0.1.0"
 [[package]]
 name = "cx-view"
 version = "0.1.0"
+dependencies = [
+ "cx-core",
+ "cx-ecs",
+]
 
 [[package]]
 name = "cx-worldgen"

@@ -19,6 +19,9 @@ m0-core = []
 m0-ecs = ["m0-core"]
 m0-fields = ["m0-core"]
 m0-module = ["m0-core"]
+# M1 gates. `m1-view` covers what needs no GPU; the rendering gates need a
+# decision about how to run them in CI — see docs/milestones/M1-loop-and-pixels.md.
+m1-view = ["m0-core"]
 
 [dependencies]
 
@@ -32,6 +35,7 @@ cx-core.workspace = true
 cx-ecs.workspace = true
 cx-fields.workspace = true
 cx-module.workspace = true
+cx-view.workspace = true
 
 [[bench]]
 name = "m0_ecs"
@@ -47,6 +51,11 @@ required-features = ["m0-fields"]
 name = "m0_alloc"
 harness = false
 required-features = ["m0-ecs", "m0-fields"]
+
+[[bench]]
+name = "m1_extract"
+harness = false
+required-features = ["m1-view"]
 
 [[bench]]
 name = "m0_memory"

@@ -34,10 +34,12 @@
 
 pub mod phase;
 pub mod schedule;
+pub mod transform;
 pub mod world;
 
 pub use phase::Phase;
 pub use schedule::SimSchedule;
+pub use transform::{PreviousTransform, Transform, copy_previous_transforms};
 pub use world::{SimWorld, WorldConfig};
 
 /// Deferred structural change.

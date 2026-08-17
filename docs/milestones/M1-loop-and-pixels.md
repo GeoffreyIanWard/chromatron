@@ -34,6 +34,37 @@ First frame on screen, and — more importantly — the first proof that the sim
 | wgpu types outside `cx-render` | zero, CI enforced |
 | Pause → step 5 → resume vs run 5 continuously | identical state |
 
+## Measured so far
+
+| Check | Budget | Dev | |
+|---|---|---|---|
+| `extract_100k_instances` | < 2 ms | 626 µs | 3.2x headroom |
+
+## Open question: three M1 gates need a GPU that CI does not have
+
+`render_100k_instances_fps`, `frame_time_p99_30hz_sim_144hz_render`, and
+`debug_draw_10k_lines` all need a working graphics device. GitHub's standard runners have
+none, and the milestone rule says a milestone is not complete until its benchmarks pass in
+CI. As written, M1 cannot complete.
+
+Three ways out, and they are not exclusive:
+
+1. **Software rasterizer in CI** (lavapipe for Vulkan on Linux). wgpu runs against it, so the
+   pipeline builds, draws, and reports draw-call counts — but frame rates from a software
+   rasterizer are meaningless, so only the *correctness* half of these gates would move.
+2. **A self-hosted runner with a GPU.** Real numbers, real cost and maintenance.
+3. **Split the gates**: correctness in CI (draw-call count, zero validation errors, no
+   pipeline rebuilds per frame), and frame rate measured on a named developer machine and
+   recorded in `bench/baselines.md` the way the CI/dev columns already are for M0.
+
+Leaning 1 plus 3: run everything that can be checked without a real GPU in CI, and treat
+frame rate as a recorded measurement against reference hardware rather than a gate a shared
+runner could ever honestly enforce. That keeps the gate rule meaningful instead of quietly
+exempting the rendering work from it.
+
+**This needs deciding before the renderer lands**, because it determines whether S12 is
+written to be testable headlessly or not.
+
 ## Notes
 
 The stutter criterion is the one to take seriously. A 30 Hz sim rendered at 144 Hz without correct interpolation looks obviously wrong, and the fix is architectural rather than a tuning pass. If motion is not smooth here, the extract contract is broken.
