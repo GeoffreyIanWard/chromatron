@@ -19,6 +19,8 @@ Reference hardware: 8 physical cores, 32 GB RAM, mid-range discrete GPU. Profile
 | `per_module_smoke_profiles` | all pass | S20 |
 | `determinism_threads_1_4_16` | exact match, 10k ticks | S14 |
 | `determinism_subprocess` | exact match, 10k ticks | S14 |
+| `graph_export_byte_identical` | exact, 10 shuffled orders | S21 |
+| `graph_export_minimal_profile` | < 500 ms, no tick run | S21 |
 
 ## m1
 
@@ -29,6 +31,8 @@ Reference hardware: 8 physical cores, 32 GB RAM, mid-range discrete GPU. Profile
 | `extract_100k_instances` | < 2 ms | S12 |
 | `debug_draw_10k_lines` | < 1 ms | S12 |
 | `headless_vs_windowed_hash` | exact, 10k ticks | S03 |
+| `graph_layout_stable_across_runs` | pixel-identical | S21 |
+| `graph_diff_no_false_positives` | 0 on unchanged commit | S21 |
 
 ## m2
 

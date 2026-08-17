@@ -1,7 +1,7 @@
 ---
 id: M0
 title: Dual Scale Proof (headless)
-specs: [S01, S02, S03, S06]
+specs: [S01, S02, S03, S06, S20, S21]
 gate: bench/baselines.md#m0
 ---
 
@@ -20,6 +20,7 @@ gate: bench/baselines.md#m0
 - `cx-fields`: chunked SoA storage, halo exchange, kernel harness, sampling, deposit buffer (S06).
 - `chromatron-cli` with a `bench` subcommand.
 - `chromatron-bench` with criterion benchmarks wired into CI gates.
+- `chromatron-cli graph`: deterministic export of the resolved module, schedule, and field-access graph (S21). Exporter only — the viewer is M1. It lands here because it is a serialization of registries this milestone already builds, and because the export doubles as the readable artifact behind the `module_resolution_order_independence` gate.
 - Minimal `cx-diag`: state hashing and the determinism test harness. Needed now, because determinism bugs introduced here are cheapest to catch here.
 
 ## Exit criteria

@@ -38,6 +38,7 @@ Project codename: `CHROMATRON` — a Rust engine for large-scale 3D simulations,
 | Anything drawn on screen | `specs/S12-rendering.md`, `ADR-0010` |
 | Save/load, replays, migrations | `specs/S13-persistence.md`, `ADR-0004` |
 | Inspector, metrics, profiling, determinism checks | `specs/S14-observability.md`, `ADR-0004` |
+| Visualizing the architecture, graph export, isometric viewer | `specs/S21-architecture-graph.md`, `specs/S20-module-system.md` |
 | Animation, VFX, audio | `specs/S15-presentation.md`, `ADR-0002` |
 | Menus, input, settings, game UI | `specs/S16-app-shell.md` |
 | Mods, scripting, plugin API | `specs/S17-extensibility.md`, `ADR-0007` |
@@ -68,6 +69,7 @@ Project codename: `CHROMATRON` — a Rust engine for large-scale 3D simulations,
 | S18 | Platform & Shipping (desktop only) | not started | M10 |
 | S19 | Terrain Modification & Construction | not started | M4B (tile layout at M1) |
 | S20 | Module System & Composition | not started | M0 |
+| S21 | Architecture Graph & Isometric Viewer | not started | M0 (export) / M1 (viewer) |
 
 ## Milestone order
 

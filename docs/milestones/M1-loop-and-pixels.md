@@ -1,7 +1,7 @@
 ---
 id: M1
 title: Loop & Pixels
-specs: [S03, S12]
+specs: [S03, S12, S21]
 gate: bench/baselines.md#m1
 ---
 
@@ -19,6 +19,7 @@ First frame on screen, and — more importantly — the first proof that the sim
 - Debug draw: lines, spheres, AABBs, arrows, world-space text.
 - egui overlay with tick counter, frame graph, and time controls.
 - Free-fly camera.
+- `tools/graph-viewer`: the isometric architecture viewer over the M0 graph export, with stable layout and `--baseline` diff (S21). Independent of the renderer above — it is a static page, not engine code — but it lands here because M1 is the first milestone with enough modules and systems registered for the diagram to be worth looking at.
 - **Tile layout fixed** (`TILE_CELLS = 64`, 256 tiles per chunk) and dirty-tracking bitsets stubbed in. Mesh layout depends on this and M4B cannot retrofit it (`ADR-0011`). Safe to fix now that `ADR-0013` settled terrain representation as a heightfield.
 
 ## Exit criteria
