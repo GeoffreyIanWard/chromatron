@@ -136,12 +136,17 @@ now so it does not need reworking later, but nothing streams before M7.
 
 ## Open questions
 
-- Whether the field-access layer can be derived automatically from system parameter sets or
-  needs an explicit declaration in `Module::register`. Automatic is better if `bevy_ecs`
-  access metadata is rich enough to attribute a field write to a system; explicit is more
-  work per module but cannot be wrong. Resolve when `cx-fields` deposit plumbing exists at M0.
+- ~~Whether the field-access layer is derived automatically or declared.~~ Decided:
+  **declared explicitly** in `Module::register`, with a test cross-checking the declaration
+  against `bevy_ecs` access metadata where that metadata can attribute an access. Automatic
+  derivation is silently incomplete when a write goes through the deposit buffer rather than
+  a system parameter, and a graph that quietly omits an `ELEVATION` writer is worse than no
+  graph. The declaration is the claim; the cross-check is what stops it from rotting.
 - Whether the generation pipeline (S07) — the *second* composition graph in `ADR-0012` —
   is a fourth layer here or its own view. It is a DAG of stages rather than a phase
   schedule, so the isometric treatment may not transfer. Revisit at M2.
-- Whether graph diff should hard-fail CI or only annotate a pull request. Leaning annotate,
-  hard-fail for the `ELEVATION` writer-count assertion specifically.
+- ~~Whether graph diff should hard-fail CI or only annotate a pull request.~~ Decided:
+  **annotate**, with one exception — the `ELEVATION` writer-count assertion hard-fails
+  (`ADR-0011` permits exactly two writers, so a third is a defect rather than a change).
+  A diff that blocks merges on every legitimate architecture change gets switched off within
+  a month, and a check nobody runs is worth less than one that merely reports.

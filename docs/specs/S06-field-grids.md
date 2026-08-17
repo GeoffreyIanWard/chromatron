@@ -1,7 +1,7 @@
 ---
 id: S06
 title: Field Grids & Chunk Storage
-status: not started
+status: partial
 depends_on: [S01]
 provides: [field-storage, kernels, halos, sampling, deposit-buffer]
 crates_touched: [cx-fields]
@@ -40,7 +40,21 @@ No physics of the fields themselves — the kernels that model water and erosion
 - Quantized `u8` field round-trips within its declared precision; the quantization error is reported at registration, not discovered later.
 - Zero allocations per tick in the steady state.
 
+## What is implemented
+
+`f32` chunked SoA storage with lazy allocation, halo rings and exchange, the double-buffered
+kernel harness, bilinear and nearest sampling, the deterministic deposit buffer, and
+tile dirty tracking.
+
+**Not yet**, and all needed before M4 rather than M0: quantized element types (`u8`/`u16`/`f16`)
+with declared quantization error — the memory budget in `bench/memory-budget.md` assumes these
+and is not reachable without them; derived fields with refresh-on-dirty (`WATER_DEPTH`);
+`optional_field(id)` resolved at schedule-build time; and row-band parallelism within a chunk.
+
+Measured at M0: 16M-cell 5-point stencil 2.52 ms against a 12 ms budget, halo exchange
+for 16 chunks 100 µs against 1 ms.
+
 ## Open questions
 
 - ~~f32 vs fixed-point for water depth.~~ Resolved by `ADR-0009`: water depth is derived, not accumulated, so drift is not possible.
-- Whether the runtime stencil workload (ecology spread and soil-moisture diffusion) is now small enough that the 16M-cell M0 target has excess headroom. Keep the target; headroom is not a problem.
+- ~~Whether the runtime stencil workload leaves the 16M-cell M0 target over-provisioned.~~ Closed: keep the target. Headroom is not a problem, and M0 exists to find the ceiling rather than to confirm a comfortable floor.

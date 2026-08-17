@@ -1,7 +1,7 @@
 ---
 id: S20
 title: Module System & Composition
-status: not started
+status: implemented
 depends_on: [S01, S02]
 provides: [module-trait, capabilities, composition, profiles, graceful-degradation]
 crates_touched: [cx-core, cx-ecs, cx-sim]
@@ -109,6 +109,21 @@ Additionally, each module gets a smoke profile of *itself plus its required depe
 - Saves record the module set; loading with a mismatch refuses and lists the differences.
 - A module can be developed against `minimal` plus its own dependencies without compiling or running the rest.
 
+## What is implemented
+
+The `Module` trait, capabilities, order-independent resolution, the five startup
+validations, profiles, and the degradation declaration — plus a sixth validation the spec
+implied but did not list: consuming a capability optionally without declaring the absent
+behavior fails to resolve.
+
+**Not yet**: the generation-pipeline composition point (needs S07), per-module smoke
+profiles in CI (needs real modules), and version constraints between modules.
+
 ## Open questions
 
-- Whether modules should be able to *replace* a capability provider (an alternative hydrology implementation) or only add. Replacement is more powerful and more dangerous. Start with add-only plus explicit exclusivity errors; revisit if a second implementation of anything is ever actually wanted.
+- ~~Whether modules should be able to *replace* a capability provider or only add.~~
+  Decided: **add-only**, with two modules exclusively providing the same capability being a
+  startup error that names both. Replacement is more powerful and more dangerous, and
+  nothing in the doc set currently wants a second implementation of anything. Revisit if
+  and when one actually exists — a real alternative implementation is a far better guide to
+  the right semantics than a hypothetical one.

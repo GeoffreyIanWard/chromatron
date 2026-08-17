@@ -10,6 +10,12 @@
 use std::fmt;
 
 /// Default tick duration in microseconds — 30 Hz.
+///
+/// The *default*, not the rate. S03 makes the tick rate configurable within
+/// 10–120 Hz, and `TickClock` takes its duration from config rather than from
+/// this constant. Everything here is rate-agnostic integer arithmetic, so a
+/// different rate needs no changes in this module — but the chosen rate is part
+/// of world identity and is recorded in saves and replays (S13).
 pub const TICK_US: u64 = 33_333;
 
 /// The canonical simulation clock.

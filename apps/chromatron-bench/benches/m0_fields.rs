@@ -31,10 +31,7 @@ const _: () = assert!(CHUNK_EDGE * CHUNK_EDGE == CHUNK_COUNT);
 const TEST_FIELD: FieldId = FieldId(0);
 
 fn store_with_chunks(threads: usize) -> FieldStore {
-    let mut store = FieldStore::new(StoreConfig {
-        threads,
-        ..StoreConfig::default()
-    });
+    let mut store = FieldStore::new(StoreConfig { threads });
 
     store.register(
         TEST_FIELD,

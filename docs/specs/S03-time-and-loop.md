@@ -1,7 +1,7 @@
 ---
 id: S03
 title: Time & Game Loop
-status: not started
+status: partial
 depends_on: [S01, S02]
 provides: [tick-clock, fixed-timestep, interpolation, speed-control, headless-driver]
 crates_touched: [cx-time, cx-app]
@@ -15,6 +15,15 @@ One loop serves three masters: a windowed game at 60+ fps, a debug session stepp
 ## Requirements
 
 - `TickClock` holding `Tick(u64)`, `TICK_US`, and an accumulator in integer microseconds.
+- **Tick rate is configurable**, not fixed at 30 Hz. `TICK_US` comes from config, validated
+  at startup against a permitted range (10–120 Hz); 30 Hz stays the default. This is nearly
+  free because `Fixed::divide` is already rate-agnostic integer arithmetic (S01), and the
+  cost of deferring it is not: scenarios, saves, and replay logs would bake in an assumed
+  rate and need migrating.
+- **The tick rate is part of world identity.** It is recorded in saves and replay logs
+  alongside the module set (`ADR-0012`, S13), and a replay at a different rate refuses
+  rather than diverging silently — the same command stream at 10 Hz and 30 Hz is not the
+  same run.
 - `TimeControl` resource: `Paused`, `Playing { multiplier }`, `Stepping { remaining }`. Multiplier range 0.1x–10,000x.
 - Spiral-of-death guard: frame delta clamped to `MAX_FRAME_DELTA` (250 ms); catch-up ticks capped at `MAX_CATCHUP` per frame (default 8). When the cap is hit, emit a `SimFallingBehind` diagnostic rather than silently slowing time.
 - Interpolation: sim entities carry `Transform` and `PreviousTransform`. `PreviousTransform` is copied at the start of each tick, before any movement. Extract blends by `alpha = accumulator / TICK_US`.
@@ -35,6 +44,28 @@ Variable-timestep simulation. Frame-rate-dependent logic of any kind. Both are b
 - Pausing, stepping 5 ticks, and resuming yields the same state as running 5 ticks continuously.
 - An injected 2-second stall causes no more than `MAX_CATCHUP` ticks in the following frame, and emits the diagnostic.
 
+## What is implemented
+
+`TickClock` with the integer accumulator, validated `TickRate` (10–120 Hz), `TimeControl`
+(pause / play / step), the frame-delta clamp and catch-up cap, `alpha` for interpolation,
+`HeadlessDriver`, and a `PacedDriver` that is the tick-counting half of the eventual
+`WindowedDriver`.
+
+**Not yet**: frame pacing to a display, `PreviousTransform` copying and the extract blend
+(both need `cx-view` at M1), and the S09 hand-off where acceleration above ~20x reduces
+per-tick work rather than running more ticks — `TimeControl::multiplier` exposes what S09
+will need.
+
 ## Open questions
 
-- Whether sub-30 Hz tick rates are wanted for the largest scenarios (e.g. 10 Hz with heavier per-tick work). Cheap to support; decide once M4 solver costs are measured.
+- **`MAX_CATCHUP` is unreachable at 30 Hz.** The frame-delta clamp (250 ms) admits at most
+  7.5 ticks at 30 Hz, so the catch-up cap of 8 can never bind — the clamp always does first.
+  The two constants come from different paragraphs of this spec and were never reconciled.
+  Both guards now report `fell_behind`, so nothing is silently dropped, but one of the two
+  numbers should move: either the clamp rises to ~300 ms so the cap is the real limit, or
+  the cap drops to 7 so it is honest. Discovered by a test that asserted the documented
+  behaviour and failed.
+- ~~Whether sub-30 Hz tick rates are wanted for the largest scenarios.~~ Decided: support a
+  configurable rate now (see Requirements). Deciding *which* rate a given large scenario
+  should use is still an M4 question, but the mechanism no longer blocks on that, and the
+  save/replay identity consequence is settled before anything depends on it.

@@ -27,7 +27,11 @@ An infinite world cannot be saved by serializing everything. Saves store the see
 - **Incremental autosave**: only dirty chunks are rewritten. Autosave runs on a background thread against a consistent snapshot; the sim must not stall for the duration of a write.
 - **Crash recovery**: write-ahead to a temp file, atomic rename. A crash mid-save never corrupts the previous save.
 - Format: `postcard` + zstd behind a versioned header. A debug mode emits RON for inspection.
-- **Interned string safety**: saves store strings, never `Id(u32)`, because the intern table is rebuilt per run (see S01's open question).
+- **Interned string safety**: saves store strings, never `Id(u32)`. Confirmed against S01 as
+  implemented: `Interner` stages strings and `freeze()` assigns ids by sorted position, so
+  ids exist only after the full set is known and are rebuilt every run. A save that stored ids
+  would break the moment content changed. `SymbolTable::content_hash` lets a load verify it
+  interned the same set as the save did.
 
 ## Non-goals
 

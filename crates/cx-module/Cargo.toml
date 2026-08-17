@@ -1,5 +1,6 @@
 [package]
 name = "cx-module"
+description = "S20 module system: capabilities, order-independent resolution, profiles."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,6 +8,13 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+cx-core.workspace = true
+cx-ecs.workspace = true
+bevy_ecs.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+cx-ecs.workspace = true
 
 [lints]
 workspace = true
