@@ -39,4 +39,9 @@ No remote/network telemetry. No always-on production analytics. Inspector edits 
 
 ## Open questions
 
-- Whether the state hash should include physics results, pending S11's cross-architecture determinism finding.
+- ~~Whether the state hash should include physics results.~~ Decided: **exclude physics by
+  default**, and include it only if S11's cross-architecture determinism test passes at M8.
+  Excluding is the reversible direction — a hash that omits physics under-detects
+  divergence, which is visible as a bug that the detector fails to catch; a hash that
+  includes non-deterministic physics reports divergence constantly and gets ignored, which
+  is how a determinism harness dies. `ADR-0004` already anticipates this outcome.

@@ -15,6 +15,15 @@ One loop serves three masters: a windowed game at 60+ fps, a debug session stepp
 ## Requirements
 
 - `TickClock` holding `Tick(u64)`, `TICK_US`, and an accumulator in integer microseconds.
+- **Tick rate is configurable**, not fixed at 30 Hz. `TICK_US` comes from config, validated
+  at startup against a permitted range (10–120 Hz); 30 Hz stays the default. This is nearly
+  free because `Fixed::divide` is already rate-agnostic integer arithmetic (S01), and the
+  cost of deferring it is not: scenarios, saves, and replay logs would bake in an assumed
+  rate and need migrating.
+- **The tick rate is part of world identity.** It is recorded in saves and replay logs
+  alongside the module set (`ADR-0012`, S13), and a replay at a different rate refuses
+  rather than diverging silently — the same command stream at 10 Hz and 30 Hz is not the
+  same run.
 - `TimeControl` resource: `Paused`, `Playing { multiplier }`, `Stepping { remaining }`. Multiplier range 0.1x–10,000x.
 - Spiral-of-death guard: frame delta clamped to `MAX_FRAME_DELTA` (250 ms); catch-up ticks capped at `MAX_CATCHUP` per frame (default 8). When the cap is hit, emit a `SimFallingBehind` diagnostic rather than silently slowing time.
 - Interpolation: sim entities carry `Transform` and `PreviousTransform`. `PreviousTransform` is copied at the start of each tick, before any movement. Extract blends by `alpha = accumulator / TICK_US`.
@@ -37,4 +46,7 @@ Variable-timestep simulation. Frame-rate-dependent logic of any kind. Both are b
 
 ## Open questions
 
-- Whether sub-30 Hz tick rates are wanted for the largest scenarios (e.g. 10 Hz with heavier per-tick work). Cheap to support; decide once M4 solver costs are measured.
+- ~~Whether sub-30 Hz tick rates are wanted for the largest scenarios.~~ Decided: support a
+  configurable rate now (see Requirements). Deciding *which* rate a given large scenario
+  should use is still an M4 question, but the mechanism no longer blocks on that, and the
+  save/replay identity consequence is settled before anything depends on it.
