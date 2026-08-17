@@ -23,6 +23,24 @@ gate: bench/baselines.md#m0
 - `chromatron-cli graph`: deterministic export of the resolved module, schedule, and field-access graph (S21). Exporter only — the viewer is M1. It lands here because it is a serialization of registries this milestone already builds, and because the export doubles as the readable artifact behind the `module_resolution_order_independence` gate.
 - Minimal `cx-diag`: state hashing and the determinism test harness. Needed now, because determinism bugs introduced here are cheapest to catch here.
 
+## API surface the gates already call
+
+The M0 benchmarks are written first (`apps/chromatron-bench/benches/m0_*.rs`), so they are
+the first real callers of each crate and their imports are a checklist. Each is behind a
+cargo feature (`m0-ecs`, `m0-fields`, `m0-module`) switched on by the commit that
+implements it; until then the benchmark does not compile and CI stays green and meaningful.
+
+| Crate | Surface the gates call |
+|---|---|
+| `cx-core` | `ChunkCoord`, and `glam` re-exported as `cx_core::glam` (S01) |
+| `cx-ecs` | `SimWorld`, `WorldConfig { threads }`, `SimSchedule`, `Phase`, `Query`, `Component`, `spawn`, `spawn_batch` |
+| `cx-fields` | `FieldStore`, `StoreConfig { threads }`, `FieldId`, `FieldSpec { name, default, persistence, halo_width, tile_dirty_tracking }`, `Persistence`, `insert_chunk`, `fill`, `run_kernel`, `exchange_halos`, `allocated_bytes` |
+| `cx-module` | `Registry`, `Profile::full_sim()`, `Profile::no_erosion()`, `resolve()`, `schedule_hash()`, `systems()`, `modules()`, `field_bytes()`, `degradation_for()`, `Capability`, `cap` |
+
+These are a proposal, not a decision — the point of writing the caller first is that a
+signature that reads badly at the use site gets changed before it has dependents. Adjust
+them while implementing, and adjust the benchmark with them.
+
 ## Exit criteria
 
 All must pass in CI, on the desktop profile **and** the 8 GB min-spec profile:

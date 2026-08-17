@@ -7,6 +7,19 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+# The M0 gates are written before the crates they measure (gates-first), so they
+# do not compile until those APIs land. Each flag is switched on by the commit
+# that implements its crate, and the milestone is not complete until all of them
+# are on and passing. Keeping them off by default is what lets CI stay green and
+# meaningful in the meantime — a permanently red build reports nothing.
+#
+# Turn on with: cargo bench -p chromatron-bench --features m0-ecs
+m0-core = []
+m0-ecs = ["m0-core"]
+m0-fields = ["m0-core"]
+m0-module = ["m0-core"]
+
 [dependencies]
 
 [dev-dependencies]
@@ -15,6 +28,26 @@ cx-core.workspace = true
 cx-ecs.workspace = true
 cx-fields.workspace = true
 cx-module.workspace = true
+
+[[bench]]
+name = "m0_ecs"
+harness = false
+required-features = ["m0-ecs"]
+
+[[bench]]
+name = "m0_fields"
+harness = false
+required-features = ["m0-fields"]
+
+[[bench]]
+name = "m0_alloc"
+harness = false
+required-features = ["m0-ecs", "m0-fields"]
+
+[[bench]]
+name = "m0_module"
+harness = false
+required-features = ["m0-module"]
 
 [lints.rust]
 unsafe_code = "warn"
