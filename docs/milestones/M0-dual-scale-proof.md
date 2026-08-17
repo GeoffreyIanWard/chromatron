@@ -63,31 +63,38 @@ All must pass in CI, on the desktop profile **and** the 8 GB min-spec profile:
 
 ## Measured so far
 
-| Check | Target | Measured | |
-|---|---|---|---|
-| 1M entities, 2-component query iteration | < 3 ms, 1 thread | 572 µs | 5x headroom |
-| 1M entities, 3 systems, full tick | < 33 ms, 8 threads | 1.21 ms | 27x headroom |
-| `spawn_batch` 100k vs `spawn` loop | ≥ 1.75x | 1.9x | re-baselined, see `bench/baselines.md` |
-| 16M field cells, 5-point stencil | < 12 ms, 8 threads | 2.52 ms | 4.8x headroom |
-| Halo exchange, 16 chunks | < 1 ms | 100 µs | 10x headroom |
-| Allocations per tick, engine code | 0 | 0 | single-threaded, `ADR-0014` |
-| Allocations per tick, executor | ≤ 16 + systems | 16 | bevy_ecs overhead |
-| Module set in 10 shuffled orders | identical schedule hash | identical | |
-| Disabling a module | zero systems, zero field bytes | verified | |
+Both columns are real runs. **CI** is `ubuntu-latest`, the shared GitHub runner, which is
+what `bench/baselines.md` gates against. **Dev** is an aarch64 developer machine, recorded
+because the gap between the two is itself useful information when a gate later drifts.
 
-Reference hardware for these numbers is a developer machine, not the CI runner in
-`bench/baselines.md`; they are indicative until CI reproduces them.
+| Check | Budget | CI | Dev | |
+|---|---|---|---|---|
+| 1M entities, 2-component query iteration | < 3 ms, 1 thread | 1.12 ms | 0.57 ms | 2.7x headroom on CI |
+| 1M entities, 3 systems, full tick | < 33 ms, 8 threads | 2.59 ms | 1.21 ms | 12.7x headroom |
+| 16M field cells, 5-point stencil | < 12 ms, 8 threads | 4.54 ms | 2.52 ms | 2.6x headroom |
+| Halo exchange, 16 chunks | < 1 ms | 188 µs | 100 µs | 5.3x headroom |
+| `spawn_batch` 100k vs `spawn` loop | ≥ 1.75x | 2.11x | 1.92x | 3.94 ms vs 1.87 ms on CI |
+| Allocations per tick, engine code | 0 | 0 | 0 | single-threaded, `ADR-0014` |
+| Allocations per tick, executor | ≤ 16 + systems | within | 16 | bevy_ecs overhead |
+| Module set in 10 shuffled orders | identical schedule hash | identical | identical | resolves in 1.2 µs |
+| Disabling a module | zero systems, zero field bytes | verified | verified | |
+
+**The two scale claims this milestone exists to test both pass on CI with real margin.** The
+tightest is the field stencil at 2.6x, which is the number to watch as ecology and
+soil-moisture kernels arrive at M4 — the current workload is one 5-point stencil, and M4 adds
+more.
+
+Note the CI/dev ratio is roughly 2x across every measurement, which is what you would expect
+from a shared runner and suggests neither environment is behaving strangely.
 
 **The spawn gate was re-baselined from 20x to 1.75x**, recorded with its reasoning in
 `bench/baselines.md`. In `bevy_ecs` 0.19 a single spawn costs about 24 ns against a batched
-12 ns, and the ratio holds at 1.9x whether spawning two components into an empty world or
-four into a populated one — so the original figure described an ECS where per-spawn
-archetype moves dominate, which this is not. The gate's intent is unchanged: bulk spawn is
-the path agents and chunk activation use, and the new threshold still fails loudly if
-`spawn_batch` ever loses its advantage.
+12 ns, so the original figure described an ECS where per-spawn archetype moves dominate,
+which this is not. The gate's intent is unchanged: bulk spawn is the path agents and chunk
+activation use, and the threshold still fails loudly if `spawn_batch` loses its advantage.
 
-The two scale claims this milestone exists to test both pass with large margins, which is
-the result that actually matters for whether M1 may begin.
+**The allocation gate was split** into engine-code and executor halves (`ADR-0014`) after CI
+measured 12 allocations per tick, all of it inside `bevy_ecs`'s multi-threaded executor.
 
 ## If it fails
 
