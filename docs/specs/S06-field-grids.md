@@ -42,6 +42,8 @@ No physics of the fields themselves — the kernels that model water and erosion
 
 ## What is implemented
 
+`FieldsModule` — the first engine subsystem to declare itself as a module (S20), providing `cap::FIELDS` and scheduling halo exchange in `FieldSolve`. It owns no fields: `ELEVATION` belongs to worldgen and `BIOMASS` to ecology, so each registers its own and disabling one genuinely frees its memory.
+
 `f32` chunked SoA storage with lazy allocation, halo rings and exchange, the double-buffered
 kernel harness, bilinear and nearest sampling, the deterministic deposit buffer, and
 tile dirty tracking.

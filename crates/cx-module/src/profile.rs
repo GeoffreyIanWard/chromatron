@@ -42,32 +42,6 @@ impl Profile {
         }
     }
 
-    /// The curated profiles from S20, by name.
-    ///
-    /// Returns `None` for an unknown name rather than a default, because a typo
-    /// in `--profile` silently resolving to something else is how a benchmark
-    /// ends up measuring the wrong configuration.
-    ///
-    /// The sets are **currently empty**: no engine subsystem is a `Module` yet,
-    /// since `cx-fields`, `cx-worldgen`, and the solvers register nothing so far.
-    /// The names exist now so the CLI, the gates, and S20's profile rule have a
-    /// stable surface to build against, and each fills in as its crate becomes a
-    /// module. An empty profile still resolves, exports, and hashes.
-    pub fn by_name(name: &str) -> Option<Self> {
-        let known = [
-            "minimal",
-            "terrain",
-            "hydro",
-            "full-sim",
-            "no-erosion",
-            "game",
-        ];
-        known
-            .iter()
-            .find(|candidate| **candidate == name)
-            .map(|candidate| Self::new(candidate))
-    }
-
     /// Registers this profile's modules into an existing registry.
     pub fn register_into(&self, registry: &mut Registry) {
         for register in &self.registrations {

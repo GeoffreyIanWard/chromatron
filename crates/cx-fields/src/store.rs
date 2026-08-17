@@ -89,6 +89,11 @@ impl FieldStore {
         self.specs.get(&field)
     }
 
+    /// Every registered field, in id order.
+    pub fn registered_fields(&self) -> impl Iterator<Item = FieldId> + '_ {
+        self.specs.keys().copied()
+    }
+
     /// Adds a chunk. Allocates nothing until a field in it is written.
     pub fn insert_chunk(&mut self, chunk: ChunkCoord) -> &mut Self {
         if !self.chunks.contains(&chunk) {
