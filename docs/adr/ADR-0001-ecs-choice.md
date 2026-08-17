@@ -12,7 +12,7 @@ Use `bevy_ecs` as a standalone dependency, wrapped by `cx-ecs` (S02). Do not ado
 
 ## Rationale
 
-`bevy_ecs` is the most heavily exercised archetypal ECS in Rust, with a mature parallel scheduler, change detection, and system ordering — the pieces most expensive and error-prone to write. Bevy's *renderer*, by contrast, is the component we most need control over, given a console target (`ADR-0005`) and an unusual dense-field workload (`ADR-0003`). Taking the ECS and leaving the renderer gets the leverage without the constraint.
+`bevy_ecs` is the most heavily exercised archetypal ECS in Rust, with a mature parallel scheduler, change detection, and system ordering — the pieces most expensive and error-prone to write. Bevy's *renderer*, by contrast, is the component we most need control over, given the low-poly desktop rendering target and containment boundary we want (`ADR-0010`) and an unusual dense-field workload (`ADR-0003`). Taking the ECS and leaving the renderer gets the leverage without the constraint.
 
 Writing our own ECS was rejected: it is months of work to reach parity, and the resulting performance advantage is speculative. The engine's real scale problem is dense fields, not entity iteration.
 
