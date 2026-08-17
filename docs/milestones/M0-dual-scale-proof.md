@@ -54,7 +54,8 @@ All must pass in CI, on the desktop profile **and** the 8 GB min-spec profile:
 | `spawn_batch` 100k vs `spawn` loop | ≥ 1.75x faster |
 | Identical state hash across thread counts 1 / 4 / 16, 10,000 ticks | exact |
 | Identical state hash in-process vs subprocess | exact |
-| Allocations per tick, steady state | 0 |
+| Allocations per tick from engine code | 0 (`ADR-0014`) |
+| Allocations per tick from the executor | ≤ 16 + systems |
 | Module set registered in 10 shuffled orders | identical resolved schedule hash |
 | Disabling a module | its per-tick cost and field allocations drop to zero, measured |
 | Each module's own smoke profile | passes |
@@ -69,6 +70,8 @@ All must pass in CI, on the desktop profile **and** the 8 GB min-spec profile:
 | `spawn_batch` 100k vs `spawn` loop | ≥ 1.75x | 1.9x | re-baselined, see `bench/baselines.md` |
 | 16M field cells, 5-point stencil | < 12 ms, 8 threads | 2.52 ms | 4.8x headroom |
 | Halo exchange, 16 chunks | < 1 ms | 100 µs | 10x headroom |
+| Allocations per tick, engine code | 0 | 0 | single-threaded, `ADR-0014` |
+| Allocations per tick, executor | ≤ 16 + systems | 16 | bevy_ecs overhead |
 | Module set in 10 shuffled orders | identical schedule hash | identical | |
 | Disabling a module | zero systems, zero field bytes | verified | |
 

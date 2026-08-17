@@ -41,8 +41,20 @@ pub mod targets {
     /// about 24 ns and a batched one about 12 ns. See the baseline-changes note
     /// in `docs/bench/baselines.md`.
     pub const SPAWN_BATCH_SPEEDUP: f64 = 1.75;
-    /// `alloc_per_tick_steady_state` — exactly zero.
+    /// `alloc_per_tick_sim_code` — exactly zero.
+    ///
+    /// Measured single-threaded, where the executor contributes nothing, so any
+    /// allocation counted is one this project wrote (`ADR-0014`).
     pub const ALLOCATIONS_PER_TICK: u64 = 0;
+
+    /// `alloc_per_tick_executor` — bevy_ecs's multi-threaded executor overhead.
+    ///
+    /// Measured at 13 per tick with no systems plus one per system; the budget
+    /// leaves a little room so ordinary variation does not flake, while still
+    /// failing if a bevy_ecs upgrade regresses per-run cost (`ADR-0014`).
+    pub const fn executor_allocation_budget(systems: usize) -> u64 {
+        16 + systems as u64
+    }
 }
 
 pub mod counting_alloc;
