@@ -36,9 +36,11 @@
 )]
 
 pub mod deposit;
+pub mod module;
 pub mod storage;
 pub mod store;
 
 pub use deposit::{Deposit, DepositBuffer, DepositOp};
+pub use module::{Fields, FieldsModule};
 pub use storage::{ChunkField, FieldSpec, Persistence};
 pub use store::{FieldId, FieldStore, Kernel, StoreConfig};

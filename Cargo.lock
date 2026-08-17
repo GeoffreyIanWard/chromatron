@@ -641,8 +641,11 @@ version = "0.1.0"
 name = "cx-fields"
 version = "0.1.0"
 dependencies = [
+ "bevy_ecs",
  "bevy_tasks",
  "cx-core",
+ "cx-ecs",
+ "cx-module",
  "thiserror",
 ]
 
@@ -679,6 +682,14 @@ version = "0.1.0"
 [[package]]
 name = "cx-sim"
 version = "0.1.0"
+dependencies = [
+ "cx-core",
+ "cx-diag",
+ "cx-ecs",
+ "cx-fields",
+ "cx-module",
+ "cx-time",
+]
 
 [[package]]
 name = "cx-solvers"

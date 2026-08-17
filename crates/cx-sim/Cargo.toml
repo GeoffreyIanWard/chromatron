@@ -7,6 +7,12 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+cx-core.workspace = true
+cx-ecs.workspace = true
+cx-module.workspace = true
+cx-fields.workspace = true
+cx-time.workspace = true
+cx-diag.workspace = true
 
 [lints]
 workspace = true

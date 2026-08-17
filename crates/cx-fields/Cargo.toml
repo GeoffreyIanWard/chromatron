@@ -9,6 +9,9 @@ publish.workspace = true
 
 [dependencies]
 cx-core.workspace = true
+cx-ecs.workspace = true
+cx-module.workspace = true
+bevy_ecs.workspace = true
 bevy_tasks.workspace = true
 thiserror.workspace = true
 

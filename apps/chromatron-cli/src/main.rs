@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use anyhow::Context as _;
 use clap::{Parser, Subcommand};
-use cx_module::{Profile, Registry};
+use cx_module::Registry;
 
 #[derive(Parser)]
 #[command(
@@ -53,8 +53,14 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn graph(profile: &str, out: Option<PathBuf>, baseline: Option<PathBuf>) -> anyhow::Result<()> {
-    let selected = Profile::by_name(profile)
-        .with_context(|| format!("unknown profile `{profile}`; see S20 for the curated set"))?;
+    // Profile membership lives in cx-sim: naming modules is the facade's job,
+    // and cx-module must not depend on the subsystems implementing its trait.
+    let selected = cx_sim::by_name(profile).with_context(|| {
+        format!(
+            "unknown profile `{profile}`; known profiles are {}",
+            cx_sim::NAMES.join(", ")
+        )
+    })?;
 
     let mut registry = Registry::new();
     selected.register_into(&mut registry);
