@@ -25,7 +25,7 @@ One loop serves three masters: a windowed game at 60+ fps, a debug session stepp
   rather than diverging silently — the same command stream at 10 Hz and 30 Hz is not the
   same run.
 - `TimeControl` resource: `Paused`, `Playing { multiplier }`, `Stepping { remaining }`. Multiplier range 0.1x–10,000x.
-- Spiral-of-death guard: frame delta clamped to `MAX_FRAME_DELTA` (250 ms); catch-up ticks capped at `MAX_CATCHUP` per frame (default 8). When the cap is hit, emit a `SimFallingBehind` diagnostic rather than silently slowing time.
+- Spiral-of-death guard: frame delta clamped to `MAX_FRAME_DELTA` (250 ms); catch-up ticks capped at `MAX_CATCHUP` per frame (`7`, matched to what the clamp actually admits at the default 30 Hz rate). When the cap is hit, emit a `SimFallingBehind` diagnostic rather than silently slowing time.
 - Interpolation: sim entities carry `Transform` and `PreviousTransform`. `PreviousTransform` is copied at the start of each tick, before any movement. Extract blends by `alpha = accumulator / TICK_US`.
 - Two drivers over one core:
   - `WindowedDriver` — the loop in `02-architecture.md`, paced to the display.
@@ -58,13 +58,13 @@ will need.
 
 ## Open questions
 
-- **`MAX_CATCHUP` is unreachable at 30 Hz.** The frame-delta clamp (250 ms) admits at most
-  7.5 ticks at 30 Hz, so the catch-up cap of 8 can never bind — the clamp always does first.
-  The two constants come from different paragraphs of this spec and were never reconciled.
-  Both guards now report `fell_behind`, so nothing is silently dropped, but one of the two
-  numbers should move: either the clamp rises to ~300 ms so the cap is the real limit, or
-  the cap drops to 7 so it is honest. Discovered by a test that asserted the documented
-  behaviour and failed.
+- ~~`MAX_CATCHUP` is unreachable at 30 Hz.~~ Resolved: `MAX_CATCHUP` is `7`, not `8`. The
+  frame-delta clamp (250 ms) admits at most 7.5 ticks at the default 30 Hz rate, so the
+  clamp is the guard that actually binds; a cap of 8 could never be reached. Set to the
+  number the clamp can actually produce, so the constant describes real behaviour. At a
+  faster configured tick rate the clamp admits more ticks per frame and the cap becomes the
+  real limit instead. Discovered by a test that asserted the documented behaviour and
+  failed.
 - ~~Whether sub-30 Hz tick rates are wanted for the largest scenarios.~~ Decided: support a
   configurable rate now (see Requirements). Deciding *which* rate a given large scenario
   should use is still an M4 question, but the mechanism no longer blocks on that, and the

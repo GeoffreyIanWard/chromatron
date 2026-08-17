@@ -20,7 +20,14 @@ use crate::error::TimeError;
 pub const MAX_FRAME_DELTA_US: u64 = 250_000;
 
 /// Most catch-up ticks the clock will report for a single frame.
-pub const MAX_CATCHUP: u64 = 8;
+///
+/// 7, not a rounder number: `MAX_FRAME_DELTA_US` (250 ms) already limits a frame
+/// to 7.5 ticks at the default 30 Hz rate, so the frame clamp is the guard that
+/// actually binds and a cap of 8 could never be reached. This constant is set to
+/// the number the clamp can actually produce, so it describes real behaviour
+/// instead of an unreachable ceiling. At a faster configured rate the clamp
+/// admits more ticks per frame and this cap becomes the real limit instead.
+pub const MAX_CATCHUP: u64 = 7;
 
 /// Slowest supported tick rate, in Hz.
 pub const MIN_TICK_HZ: u64 = 10;
@@ -91,10 +98,10 @@ pub struct CatchUp {
     /// makes "why is my game running in slow motion" unanswerable (S03 calls for
     /// a `SimFallingBehind` diagnostic).
     ///
-    /// Note that **at 30 Hz the frame clamp binds before the catch-up cap ever
-    /// can**: 250 ms of clamped delta is 7.5 ticks, so `MAX_CATCHUP` of 8 is
-    /// unreachable. Both guards therefore set this flag. See S03's open
-    /// questions — the two constants want reconciling.
+    /// At the default 30 Hz rate the frame clamp is the guard that actually
+    /// binds — 250 ms of clamped delta is 7.5 ticks, which is why
+    /// `MAX_CATCHUP` is 7. Both guards set this flag regardless of which one
+    /// fired, since either way simulated time was dropped.
     pub fell_behind: bool,
     /// Real time discarded by the frame-delta clamp.
     pub discarded: Fixed,
