@@ -684,6 +684,13 @@ version = "0.1.0"
 [[package]]
 name = "cx-time"
 version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "cx-core",
+ "cx-ecs",
+ "thiserror",
+ "tracing",
+]
 
 [[package]]
 name = "cx-ui"

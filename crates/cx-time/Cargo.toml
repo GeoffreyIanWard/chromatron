@@ -1,5 +1,6 @@
 [package]
 name = "cx-time"
+description = "S03 time and loop: tick clock, speed control, headless driver."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,6 +8,13 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+cx-core.workspace = true
+cx-ecs.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+bevy_ecs.workspace = true
 
 [lints]
 workspace = true
