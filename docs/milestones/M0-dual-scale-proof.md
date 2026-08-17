@@ -60,6 +60,30 @@ All must pass in CI, on the desktop profile **and** the 8 GB min-spec profile:
 | Each module's own smoke profile | passes |
 | Peak memory, 16 chunks + 1M entities | < 8 GB |
 
+## Measured so far
+
+| Check | Target | Measured | |
+|---|---|---|---|
+| 1M entities, 2-component query iteration | < 3 ms, 1 thread | 572 µs | 5x headroom |
+| 1M entities, 3 systems, full tick | < 33 ms, 8 threads | 1.21 ms | 27x headroom |
+| `spawn_batch` 100k vs `spawn` loop | ≥ 20x | **1.9x** | **fails** |
+| Module set in 10 shuffled orders | identical schedule hash | identical | |
+| Disabling a module | zero systems, zero field bytes | verified | |
+
+Reference hardware for these numbers is a developer machine, not the CI runner in
+`bench/baselines.md`; they are indicative until CI reproduces them.
+
+**The spawn gate needs a decision, not a fix.** In `bevy_ecs` 0.19 a single spawn costs
+about 24 ns against a batched 12 ns, and the ratio holds at 1.9x whether spawning two
+components into an empty world or four into a populated one. The 20x figure describes an
+ECS where per-spawn archetype moves dominate; this is not that ECS. The gate's *intent* —
+bulk spawn is the path agents and chunk activation use — still holds. Re-baselining is a
+deliberate change with an owner (`bench/baselines.md`: never silently loosen a gate), so
+the gate stays red until that call is made.
+
+The two scale claims this milestone exists to test both pass with large margins, which is
+the result that actually matters for whether M1 may begin.
+
 ## If it fails
 
 Stop. Do not proceed to M1. The likely revisions, in order of probability: quantize field element types more aggressively; reduce `CELLS_PER_CHUNK_EDGE`; move field solving to GPU compute earlier than planned; reconsider whether 1M entities is the right target versus 1M *simulated things* where most are statistical (S09) rather than ECS entities. Record whichever revision is taken as an ADR.

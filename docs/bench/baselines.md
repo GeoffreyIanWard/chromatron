@@ -10,7 +10,7 @@ Reference hardware: 8 physical cores, 32 GB RAM, mid-range discrete GPU. Profile
 |---|---|---|
 | `ecs_iterate_1m_2comp` | < 3 ms, 1 thread | S02 |
 | `ecs_tick_1m_3systems` | < 33 ms, 8 threads | S02 |
-| `ecs_spawn_batch_100k_speedup` | ≥ 20x vs loop | S02 |
+| `ecs_spawn_batch_100k_speedup` | ≥ 20x vs loop — **failing at 1.9x, needs a decision** | S02 |
 | `field_stencil_16m_cells` | < 12 ms, 8 threads | S06 |
 | `field_halo_exchange_16_chunks` | < 1 ms | S06 |
 | `alloc_per_tick_steady_state` | 0 | S02, S06 |

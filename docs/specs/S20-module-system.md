@@ -1,7 +1,7 @@
 ---
 id: S20
 title: Module System & Composition
-status: not started
+status: implemented
 depends_on: [S01, S02]
 provides: [module-trait, capabilities, composition, profiles, graceful-degradation]
 crates_touched: [cx-core, cx-ecs, cx-sim]
@@ -108,6 +108,16 @@ Additionally, each module gets a smoke profile of *itself plus its required depe
 - The `no-erosion` profile produces a valid, playable world differing from `full-sim` only in terrain shape.
 - Saves record the module set; loading with a mismatch refuses and lists the differences.
 - A module can be developed against `minimal` plus its own dependencies without compiling or running the rest.
+
+## What is implemented
+
+The `Module` trait, capabilities, order-independent resolution, the five startup
+validations, profiles, and the degradation declaration — plus a sixth validation the spec
+implied but did not list: consuming a capability optionally without declaring the absent
+behavior fails to resolve.
+
+**Not yet**: the generation-pipeline composition point (needs S07), per-module smoke
+profiles in CI (needs real modules), and version constraints between modules.
 
 ## Open questions
 
