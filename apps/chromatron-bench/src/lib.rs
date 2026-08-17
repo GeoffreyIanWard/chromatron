@@ -59,3 +59,4 @@ pub mod targets {
 
 pub mod counting_alloc;
 pub mod gate;
+pub mod rss;

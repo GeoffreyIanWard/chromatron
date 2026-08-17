@@ -49,6 +49,11 @@ harness = false
 required-features = ["m0-ecs", "m0-fields"]
 
 [[bench]]
+name = "m0_memory"
+harness = false
+required-features = ["m0-ecs", "m0-fields"]
+
+[[bench]]
 name = "m0_module"
 harness = false
 required-features = ["m0-module"]

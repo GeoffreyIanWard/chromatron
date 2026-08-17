@@ -81,6 +81,7 @@ because the gap between the two is itself useful information when a gate later d
 | Module set in 10 shuffled orders | identical schedule hash | identical | identical | resolves in 1.2 µs |
 | Disabling a module | zero systems, zero field bytes | verified | verified | |
 | Each module's own smoke profile | passes | — | passes | one module exists (`fields`) |
+| Peak memory, 16 chunks + 1M entities | < 8 GiB | pending | not measurable | Linux-only probe; CI is authoritative |
 
 **The determinism gates pass but are not yet adversarial.** `cx-ecs` exposes no parallel
 iteration, so the scenario's systems are deterministic by construction rather than by
