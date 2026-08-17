@@ -112,6 +112,49 @@ impl SystemDecl {
     }
 }
 
+/// How a system touches a field (S21).
+///
+/// Declared rather than derived. Automatic derivation from system parameters is
+/// silently incomplete for writes that go through the deposit buffer, and a
+/// graph that quietly omits an `ELEVATION` writer is worse than no graph — see
+/// S21's resolved open question.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Access {
+    /// Reads the field.
+    Read,
+    /// Writes it directly.
+    Write,
+    /// Writes it through the deposit buffer, applied in `FieldDeposit`.
+    Deposit,
+}
+
+impl Access {
+    /// Lowercase name, as it appears in the exported graph.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Access::Read => "read",
+            Access::Write => "write",
+            Access::Deposit => "deposit",
+        }
+    }
+
+    /// Whether this access modifies the field.
+    pub const fn is_write(self) -> bool {
+        matches!(self, Access::Write | Access::Deposit)
+    }
+}
+
+/// One system's declared access to one field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct FieldAccess {
+    /// The system doing the touching.
+    pub system: &'static str,
+    /// The field name, `SCREAMING_SNAKE`.
+    pub field: &'static str,
+    /// How it is touched.
+    pub access: Access,
+}
+
 /// A dense field a module owns (S06).
 ///
 /// A field belonging to a disabled module is never allocated — disabling ecology
@@ -135,6 +178,7 @@ pub struct Registrar {
     pub(crate) module: Option<ModuleId>,
     pub(crate) systems: Vec<SystemDecl>,
     pub(crate) fields: Vec<FieldDecl>,
+    pub(crate) accesses: Vec<FieldAccess>,
 }
 
 impl Registrar {
@@ -159,6 +203,25 @@ impl Registrar {
             install: Box::new(move |schedule: &mut SimSchedule| {
                 schedule.add_system(phase, system);
             }),
+        });
+        self
+    }
+
+    /// Declares how one of this module's systems touches a field.
+    ///
+    /// The declaration is the claim the S21 graph renders; a test cross-checks it
+    /// against `bevy_ecs` access metadata where that metadata can attribute an
+    /// access, which is what stops the claim from rotting.
+    pub fn access(
+        &mut self,
+        system: &'static str,
+        field: &'static str,
+        access: Access,
+    ) -> &mut Self {
+        self.accesses.push(FieldAccess {
+            system,
+            field,
+            access,
         });
         self
     }

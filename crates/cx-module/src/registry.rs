@@ -12,8 +12,8 @@ use cx_core::hash::{combine, mix64};
 
 use crate::capability::{Capability, Degradation};
 use crate::error::ModuleError;
-use crate::module::{FieldDecl, Module, ModuleId, Registrar, SystemDecl, Version};
-use crate::resolved::{ModuleRecord, Resolved};
+use crate::module::{FieldAccess, FieldDecl, Module, ModuleId, Registrar, SystemDecl, Version};
+use crate::resolved::{ModuleRecord, Resolved, SystemRecord};
 
 /// One registered module, before resolution.
 struct Entry {
@@ -25,6 +25,7 @@ struct Entry {
     degradations: &'static [Degradation],
     systems: Vec<SystemDecl>,
     fields: Vec<FieldDecl>,
+    accesses: Vec<FieldAccess>,
 }
 
 /// Collects modules, then resolves them into a schedule.
@@ -69,6 +70,7 @@ impl Registry {
             degradations: M::degradations(),
             systems: registrar.systems,
             fields: registrar.fields,
+            accesses: registrar.accesses,
         });
         self
     }
@@ -290,7 +292,25 @@ impl Registry {
                 requires: entry.requires,
                 consumes_optional: entry.consumes_optional,
                 degradations: entry.degradations,
-                system_names: entry.systems.iter().map(|system| system.name).collect(),
+                systems: {
+                    let mut systems: Vec<SystemRecord> = entry
+                        .systems
+                        .iter()
+                        .map(|system| SystemRecord {
+                            name: system.name,
+                            phase: system.phase,
+                        })
+                        .collect();
+                    // Sorted, so a module's internal registration order cannot
+                    // reach the schedule hash or the exported graph.
+                    systems.sort_unstable();
+                    systems
+                },
+                accesses: {
+                    let mut accesses = entry.accesses.clone();
+                    accesses.sort_unstable();
+                    accesses
+                },
                 fields: entry.fields.clone(),
             });
         }
@@ -305,17 +325,25 @@ impl Registry {
     /// resolved order. It deliberately does *not* cover registration order —
     /// that is the property the shuffled test asserts.
     fn schedule_hash(records: &[ModuleRecord]) -> u64 {
-        let mut hash = mix64(records.len() as u64);
+        // Seeded with a domain constant rather than starting from the record
+        // count, because SplitMix64's finalizer maps 0 to 0: an empty module set
+        // would otherwise hash to all zeroes, which is indistinguishable from
+        // "no hash recorded" in a save, a replay, or an exported graph.
+        const SCHEDULE_DOMAIN: u64 = 0x5343_4845_4455_4c45; // "SCHEDULE"
+        let mut hash = mix64(SCHEDULE_DOMAIN ^ records.len() as u64);
         for record in records {
             for byte in record.id.name().as_bytes() {
                 hash = combine(hash, *byte as u64);
             }
             hash = combine(hash, record.version.major as u64);
             hash = combine(hash, record.version.minor as u64);
-            for name in &record.system_names {
-                for byte in name.as_bytes() {
+            for system in &record.systems {
+                for byte in system.name.as_bytes() {
                     hash = combine(hash, *byte as u64);
                 }
+                // The phase is part of schedule identity: moving a system across
+                // a phase boundary changes what the tick does.
+                hash = combine(hash, system.phase.index() as u64);
             }
             for field in &record.fields {
                 for byte in field.name.as_bytes() {

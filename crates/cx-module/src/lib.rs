@@ -43,6 +43,7 @@
 
 pub mod capability;
 pub mod error;
+pub mod graph;
 pub mod module;
 pub mod profile;
 pub mod registry;
@@ -50,7 +51,10 @@ pub mod resolved;
 
 pub use capability::{Capability, Degradation, cap};
 pub use error::ModuleError;
-pub use module::{FieldDecl, Module, ModuleId, Registrar, SystemDecl, Version};
+pub use graph::{SCHEMA_VERSION, export, writers_of};
+pub use module::{
+    Access, FieldAccess, FieldDecl, Module, ModuleId, Registrar, SystemDecl, Version,
+};
 pub use profile::Profile;
 pub use registry::Registry;
-pub use resolved::{ModuleRecord, Resolved};
+pub use resolved::{ModuleRecord, Resolved, SystemRecord};

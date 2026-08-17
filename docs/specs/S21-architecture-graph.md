@@ -1,7 +1,7 @@
 ---
 id: S21
 title: Architecture Graph & Isometric Viewer
-status: not started
+status: partial (export at M0; viewer at M1)
 depends_on: [S02, S06, S14, S20]
 provides: [graph-export, graph-schema, isometric-viewer, graph-diff]
 crates_touched: [cx-module, cx-ecs, cx-fields, cx-diag, chromatron-cli]
@@ -113,6 +113,24 @@ now so it does not need reworking later, but nothing streams before M7.
   behind a `cx-diag` feature that the `game` profile does not enable.
 - **No render dependency.** Export runs headless. The viewer is a static page with no
   engine code in it, so the `sim/` firewall is untouched.
+
+## What is implemented at M0
+
+The export: `chromatron-cli graph --profile <name> [--out file] [--baseline file]`, producing
+the composition, schedule, and field-access layers as deterministic JSON with a schema
+version and the resolved schedule hash. Field access is declared per system via
+`Registrar::access`, per the resolved open question below.
+
+Two consequences of decisions made while building it:
+
+- **The profiles are currently empty.** No engine subsystem is a `Module` yet — `cx-fields`,
+  `cx-worldgen`, and the solvers register nothing so far — so `--profile minimal` exports a
+  valid, empty graph. The names exist now so the CLI, the gates, and S20's profile rule have
+  a stable surface, and each fills in as its crate becomes a module.
+- **The export lives in `cx-module`, not `cx-diag`.** It serializes that crate's own resolved
+  state, so keeping them together means they cannot drift apart across a crate boundary.
+
+Still M1: the isometric viewer, stable layout, and the rendered diff.
 
 ## Acceptance criteria
 
