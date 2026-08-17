@@ -11,7 +11,6 @@
 //!    `StructuralApply` — never mid-iteration.
 
 use std::hint::black_box;
-use std::time::Instant;
 
 use chromatron_bench::{BENCH_THREADS, gate, targets};
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -179,33 +178,23 @@ fn bench_spawn_batch_speedup(c: &mut Criterion) {
 
     group.finish();
 
-    let batched = time_once(|| {
-        let mut world = SimWorld::new(WorldConfig::default());
-        world
-            .spawn_batch((0..SPAWN_BATCH_COUNT).map(|i| (Position(Vec3::splat(i as f32)), Age(0))));
-        black_box(world);
-    });
-    let looped = time_once(|| {
-        let mut world = SimWorld::new(WorldConfig::default());
-        for i in 0..SPAWN_BATCH_COUNT {
-            world.spawn((Position(Vec3::splat(i as f32)), Age(0)));
-        }
-        black_box(world);
-    });
+    // The ratio comes from criterion's sampled means, not from one run of each
+    // side. An earlier version timed each once and read 1.9x, 1.9x, then 1.5x on
+    // consecutive runs — a threshold anywhere in that spread would flake, and a
+    // flaky gate is one people learn to rerun rather than read.
+    let batched = gate::measured_mean("ecs_spawn_batch_100k/spawn_batch");
+    let looped = gate::measured_mean("ecs_spawn_batch_100k/spawn_loop");
 
     let speedup = looped.as_secs_f64() / batched.as_secs_f64();
     assert!(
         speedup >= targets::SPAWN_BATCH_SPEEDUP,
-        "gate ecs_spawn_batch_100k_speedup: {speedup:.1}x is below the required {:.0}x in \
-         docs/bench/baselines.md#m0 (batch {batched:?} vs loop {looped:?}).",
+        "gate ecs_spawn_batch_100k_speedup: {speedup:.2}x is below the required {:.2}x in \
+         docs/bench/baselines.md#m0 (batch {batched:?} vs loop {looped:?}).\n\n\
+         The threshold is not about absolute speed — both paths are fast. It exists so that \
+         spawn_batch losing its advantage is noticed, because bulk spawn is the path agent \
+         spawning and chunk activation depend on.",
         targets::SPAWN_BATCH_SPEEDUP
     );
-}
-
-fn time_once(body: impl FnOnce()) -> std::time::Duration {
-    let start = Instant::now();
-    body();
-    start.elapsed()
 }
 
 criterion_group!(
