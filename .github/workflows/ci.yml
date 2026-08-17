@@ -1,0 +1,69 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # A warning that is not an error is a warning that accumulates.
+  RUSTFLAGS: -D warnings
+
+jobs:
+  # The firewall runs on its own, first, and does not wait for the build matrix.
+  # It is the cheapest check in the repo and the most expensive violation to
+  # discover late.
+  firewall:
+    name: dependency firewall
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: rustup show # honours rust-toolchain.toml
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p ci-checks --test firewall
+
+  check:
+    name: fmt, clippy, test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets
+      - run: cargo test --workspace
+
+  # Gates-first: these compile and run only once their crate's feature is
+  # switched on by the commit that implements it. The step is expected to be a
+  # no-op until then, and is wired up now so that enabling a feature cannot
+  # forget to enable its gate.
+  gates:
+    name: m0 gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - name: M0 benchmark gates
+        run: |
+          features=""
+          for f in m0-ecs m0-fields m0-module; do
+            if cargo check -p chromatron-bench --features "$f" --benches >/dev/null 2>&1; then
+              features="${features:+$features,}$f"
+            else
+              echo "::notice::$f not yet implemented; its gate is skipped"
+            fi
+          done
+          if [ -n "$features" ]; then
+            cargo bench -p chromatron-bench --features "$features"
+          else
+            echo "no M0 gates enabled yet"
+          fi

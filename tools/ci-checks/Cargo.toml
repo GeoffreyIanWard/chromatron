@@ -1,0 +1,18 @@
+[package]
+name = "ci-checks"
+description = "Repo invariants that a compiler cannot express. Run by `cargo test -p ci-checks`."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+cargo_metadata.workspace = true
+
+# Repo tooling: panicking here is correct, so the strict sim lint set does not
+# apply (03-conventions.md).
+[lints.rust]
+unsafe_code = "warn"

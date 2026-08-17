@@ -29,6 +29,8 @@ members = [
     "apps/chromatron-game",
     "apps/chromatron-cli",
     "apps/chromatron-bench",
+    # ---- repo tooling ----
+    "tools/ci-checks",
 ]
 
 [workspace.package]
