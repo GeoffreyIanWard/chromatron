@@ -41,6 +41,10 @@ pub mod targets {
     /// about 24 ns and a batched one about 12 ns. See the baseline-changes note
     /// in `docs/bench/baselines.md`.
     pub const SPAWN_BATCH_SPEEDUP: f64 = 1.75;
+    /// `extract_100k_instances` — < 2 ms (S12).
+    ///
+    /// A frame at 144 fps is 6.9 ms, so this budget is already a third of one.
+    pub const EXTRACT_100K_INSTANCES: Duration = Duration::from_millis(2);
     /// `alloc_per_tick_sim_code` — exactly zero.
     ///
     /// Measured single-threaded, where the executor contributes nothing, so any

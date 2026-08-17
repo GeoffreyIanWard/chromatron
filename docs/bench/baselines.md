@@ -38,9 +38,9 @@ a note is a gate that stops meaning anything.
 
 | Benchmark | Target | Spec |
 |---|---|---|
-| `render_100k_instances_fps` | ≥ 60 fps, < 20 draw calls | S12 |
+| `render_100k_instances_fps` | ≥ 60 fps, < 20 draw calls — **needs a GPU, see M1 open question** | S12 |
 | `frame_time_p99_30hz_sim_144hz_render` | < 8 ms | S03 |
-| `extract_100k_instances` | < 2 ms | S12 |
+| `extract_100k_instances` | < 2 ms (no GPU needed) | S12 |
 | `debug_draw_10k_lines` | < 1 ms | S12 |
 | `headless_vs_windowed_hash` | exact, 10k ticks | S03 |
 | `graph_layout_stable_across_runs` | pixel-identical | S21 |
