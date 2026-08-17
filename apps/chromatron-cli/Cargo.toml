@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 cx-sim.workspace = true
+cx-module.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 tracing.workspace = true

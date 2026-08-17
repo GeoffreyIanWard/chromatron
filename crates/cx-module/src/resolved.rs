@@ -4,7 +4,18 @@
 //! architecture, but the structure the engine actually built at startup.
 
 use crate::capability::{Capability, Degradation};
-use crate::module::{FieldDecl, ModuleId, Version};
+use cx_ecs::Phase;
+
+use crate::module::{FieldAccess, FieldDecl, ModuleId, Version};
+
+/// A system as resolved: what it is called and when it runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SystemRecord {
+    /// Unique within its module.
+    pub name: &'static str,
+    /// The phase it runs in.
+    pub phase: Phase,
+}
 
 /// One module, as resolved.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,8 +32,10 @@ pub struct ModuleRecord {
     pub consumes_optional: &'static [Capability],
     /// Declared behaviour when an optional capability is absent.
     pub degradations: &'static [Degradation],
-    /// Systems this module registered, in registration order within the module.
-    pub system_names: Vec<&'static str>,
+    /// Systems this module registered, with the phase each runs in.
+    pub systems: Vec<SystemRecord>,
+    /// Declared field access per system (S21).
+    pub accesses: Vec<FieldAccess>,
     /// Dense fields this module owns.
     pub fields: Vec<FieldDecl>,
 }
@@ -72,7 +85,7 @@ impl Resolved {
     pub fn systems(&self) -> impl Iterator<Item = (ModuleId, &'static str)> {
         self.records
             .iter()
-            .flat_map(|record| record.system_names.iter().map(|name| (record.id, *name)))
+            .flat_map(|record| record.systems.iter().map(|system| (record.id, system.name)))
     }
 
     /// Whether a named system is scheduled.
@@ -83,7 +96,7 @@ impl Resolved {
     pub fn contains_system(&self, name: &str) -> bool {
         self.records
             .iter()
-            .any(|record| record.system_names.contains(&name))
+            .any(|record| record.systems.iter().any(|system| system.name == name))
     }
 
     /// Whether a module is enabled.

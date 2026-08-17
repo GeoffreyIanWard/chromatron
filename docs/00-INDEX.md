@@ -69,7 +69,7 @@ Project codename: `CHROMATRON` — a Rust engine for large-scale 3D simulations,
 | S18 | Platform & Shipping (desktop only) | not started | M10 |
 | S19 | Terrain Modification & Construction | not started | M4B (tile layout at M1) |
 | S20 | Module System & Composition | implemented | M0 |
-| S21 | Architecture Graph & Isometric Viewer | not started | M0 (export) / M1 (viewer) |
+| S21 | Architecture Graph & Isometric Viewer | partial (export done) | M0 (export) / M1 (viewer) |
 
 ## Milestone order
 
