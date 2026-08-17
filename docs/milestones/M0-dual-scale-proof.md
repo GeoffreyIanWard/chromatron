@@ -76,8 +76,15 @@ because the gap between the two is itself useful information when a gate later d
 | `spawn_batch` 100k vs `spawn` loop | ≥ 1.75x | 2.11x | 1.92x | 3.94 ms vs 1.87 ms on CI |
 | Allocations per tick, engine code | 0 | 0 | 0 | single-threaded, `ADR-0014` |
 | Allocations per tick, executor | ≤ 16 + systems | within | 16 | bevy_ecs overhead |
+| Identical state hash, threads 1/4/16, 10k ticks | exact | exact | exact | see caveat below |
+| Identical state hash, in-process vs subprocess | exact | exact | exact | |
 | Module set in 10 shuffled orders | identical schedule hash | identical | identical | resolves in 1.2 µs |
 | Disabling a module | zero systems, zero field bytes | verified | verified | |
+
+**The determinism gates pass but are not yet adversarial.** `cx-ecs` exposes no parallel
+iteration, so the scenario's systems are deterministic by construction rather than by
+discipline. They are a regression guard today and become a real proof when agents
+parallel-iterate at M6 — recorded as an open question in S14 rather than left implied.
 
 **The two scale claims this milestone exists to test both pass on CI with real margin.** The
 tightest is the field stencil at 2.6x, which is the number to watch as ecology and

@@ -616,6 +616,12 @@ version = "0.1.0"
 [[package]]
 name = "cx-diag"
 version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "cx-core",
+ "cx-ecs",
+ "cx-fields",
+]
 
 [[package]]
 name = "cx-ecs"
