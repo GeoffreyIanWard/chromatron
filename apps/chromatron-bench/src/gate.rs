@@ -41,7 +41,12 @@ pub fn measured_mean(id: &str) -> Duration {
 }
 
 fn estimates_path(id: &str) -> PathBuf {
-    let target = std::env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| "target".to_owned());
+    // Anchored to this crate's manifest rather than the working directory:
+    // `cargo bench` runs the benchmark binary with the *package* directory as
+    // CWD, so a relative "target" would resolve to
+    // apps/chromatron-bench/target, which does not exist.
+    let target = std::env::var("CARGO_TARGET_DIR")
+        .unwrap_or_else(|_| format!("{}/../../target", env!("CARGO_MANIFEST_DIR")));
     PathBuf::from(target)
         .join("criterion")
         .join(id)

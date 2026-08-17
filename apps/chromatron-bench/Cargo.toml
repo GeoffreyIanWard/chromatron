@@ -24,6 +24,10 @@ m0-module = ["m0-core"]
 
 [dev-dependencies]
 criterion.workspace = true
+# Needed directly, not just through cx-ecs: bevy's `#[derive(Component)]`
+# expands to absolute `bevy_ecs::` paths, so any crate that *defines* a
+# component needs the crate in scope. Re-exporting the types is not enough.
+bevy_ecs.workspace = true
 cx-core.workspace = true
 cx-ecs.workspace = true
 cx-fields.workspace = true

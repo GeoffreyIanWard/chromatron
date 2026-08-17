@@ -64,12 +64,16 @@ fn world_with_entities(count: usize, threads: usize) -> SimWorld {
 fn bench_iterate_1m_2comp(c: &mut Criterion) {
     let mut world = world_with_entities(ENTITY_COUNT, 1);
 
+    // Built once and reused: constructing a QueryState walks the archetype list,
+    // and a benchmark that rebuilt it every iteration would measure that instead
+    // of iteration.
+    let mut query = world.query::<(&mut Position, &Velocity)>();
+
     let mut group = c.benchmark_group("ecs_iterate_1m_2comp");
     group.sample_size(50);
     group.bench_function("1_thread", |b| {
         b.iter(|| {
-            let mut query: Query<(&mut Position, &Velocity)> = world.query();
-            for (mut position, velocity) in query.iter_mut(&mut world) {
+            for (mut position, velocity) in query.iter_mut(world.inner_mut()) {
                 position.0 += velocity.0;
             }
             black_box(&world);
