@@ -67,6 +67,8 @@ All must pass in CI, on the desktop profile **and** the 8 GB min-spec profile:
 | 1M entities, 2-component query iteration | < 3 ms, 1 thread | 572 µs | 5x headroom |
 | 1M entities, 3 systems, full tick | < 33 ms, 8 threads | 1.21 ms | 27x headroom |
 | `spawn_batch` 100k vs `spawn` loop | ≥ 1.75x | 1.9x | re-baselined, see `bench/baselines.md` |
+| 16M field cells, 5-point stencil | < 12 ms, 8 threads | 2.52 ms | 4.8x headroom |
+| Halo exchange, 16 chunks | < 1 ms | 100 µs | 10x headroom |
 | Module set in 10 shuffled orders | identical schedule hash | identical | |
 | Disabling a module | zero systems, zero field bytes | verified | |
 

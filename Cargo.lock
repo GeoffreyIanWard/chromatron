@@ -633,6 +633,11 @@ version = "0.1.0"
 [[package]]
 name = "cx-fields"
 version = "0.1.0"
+dependencies = [
+ "bevy_tasks",
+ "cx-core",
+ "thiserror",
+]
 
 [[package]]
 name = "cx-lod"
