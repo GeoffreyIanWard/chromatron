@@ -1,7 +1,7 @@
 ---
 id: S14
 title: Observability & Tooling
-status: not started
+status: partial (state hashing at M0; the rest at M7)
 depends_on: [S01, S02, S06]
 provides: [inspector, query-console, metrics, profiling, state-hash, invariants]
 crates_touched: [cx-diag, cx-ui]
@@ -37,8 +37,26 @@ No remote/network telemetry. No always-on production analytics. Inspector edits 
 - Field overlay renders any registered field without per-field code.
 - Headless runner exports declared metrics for a 100,000-tick run without measurable slowdown.
 
+## What is implemented at M0
+
+State hashing and the determinism harness only — `StateHash`, `StateHasher` with registered
+components and fields, `HashSequence::first_divergence`, thread-count comparison, and a
+subprocess check. Landed now rather than at M7 because a determinism bug found while the
+engine is five crates large takes an afternoon, and the same bug found at M7 means bisecting
+a year of commits with no way to tell which tick first went wrong.
+
+**Not yet, and still M7**: the divergence bisector by component and field, the invariant
+system, entity and field inspectors, the query console, metrics, Tracy spans, and
+time-series export.
+
 ## Open questions
 
+- **The thread-count gate cannot currently fail.** `determinism_threads_1_4_16` passes, but
+  `cx-ecs` exposes no parallel iteration yet, so within-system iteration is sequential and
+  the scenario's systems share no mutable state — the result is deterministic by
+  construction rather than by discipline. The gate becomes load-bearing when a system
+  parallel-iterates (agents at M6) or accumulates into a shared resource. Until then it is a
+  regression guard, not a proof. Strengthen the scenario when `par_iter` lands.
 - ~~Whether the state hash should include physics results.~~ Decided: **exclude physics by
   default**, and include it only if S11's cross-architecture determinism test passes at M8.
   Excluding is the reversible direction — a hash that omits physics under-detects

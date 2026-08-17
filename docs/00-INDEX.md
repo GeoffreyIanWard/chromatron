@@ -62,7 +62,7 @@ Project codename: `CHROMATRON` — a Rust engine for large-scale 3D simulations,
 | S11 | Physics | not started | M8 |
 | S12 | Rendering | not started | M1 |
 | S13 | Persistence | not started | M7 |
-| S14 | Observability | not started | M7 |
+| S14 | Observability | partial (hashing at M0) | M0/M7 |
 | S15 | Presentation | not started | M9 |
 | S16 | App Shell | not started | M9 |
 | S17 | Extensibility | not started | M9 |
