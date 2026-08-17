@@ -59,12 +59,12 @@ No allocator work, no custom collections beyond the arena, no serialization (tha
   exists before the full set is known and an order-dependent id cannot be observed. Saves
   must therefore store strings, not `Id`s — **confirm against S13 before persistence work
   begins.** `SymbolTable::content_hash` exists for a load to verify it interned the same set.
-- `hash_position`'s cross-architecture criterion is only half-testable locally. The pinned
-  vector in `hash.rs` asserts stability for a given build; the x86-64/aarch64 equality
-  claim needs the same test running on both in CI. The matrix runs Linux, Windows, and
-  macOS, but all on x86-64 except macOS — add an aarch64 runner before trusting that
-  criterion.
-- `Config` models values as a flat map of dotted keys, so a TOML array becomes a
-  comma-joined string. That suits lists of module ids and content paths, which is all S20
-  and S04 currently need. If a config ever needs an array of tables, this representation
-  is the thing to revisit.
+- ~~`hash_position`'s cross-architecture criterion is only half-testable locally.~~ Not
+  actually open: `macos-latest` is aarch64 (macos-14 and later), so the existing CI matrix
+  already runs the pinned vector on x86-64 (Linux, Windows) **and** aarch64 (macOS). The
+  same constants passing on both *is* the cross-architecture proof the criterion asks for.
+  No extra runner needed. Confirm on the first green CI run rather than assuming.
+- ~~Whether `Config`'s flat dotted-key model is sufficient.~~ Decided: keep it flat. A TOML
+  array becomes a comma-joined string, which covers what S20 and S04 need — lists of module
+  ids and content paths. An array of tables would need a different representation; revisit
+  then, not before.

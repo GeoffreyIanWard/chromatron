@@ -43,4 +43,4 @@ No physics of the fields themselves — the kernels that model water and erosion
 ## Open questions
 
 - ~~f32 vs fixed-point for water depth.~~ Resolved by `ADR-0009`: water depth is derived, not accumulated, so drift is not possible.
-- Whether the runtime stencil workload (ecology spread and soil-moisture diffusion) is now small enough that the 16M-cell M0 target has excess headroom. Keep the target; headroom is not a problem.
+- ~~Whether the runtime stencil workload leaves the 16M-cell M0 target over-provisioned.~~ Closed: keep the target. Headroom is not a problem, and M0 exists to find the ceiling rather than to confirm a comfortable floor.

@@ -122,6 +122,15 @@ No voxel terrain, caves, tunnels, or overhangs (`ADR-0013`). No destructible str
 
 ## Open questions
 
-- Whether excavation volume bookkeeping is a mechanic you want. It is cheap to implement and significantly changes how building feels; leaving it flagged off costs nothing.
+- ~~Whether excavation volume bookkeeping is a mechanic you want.~~ Decided: **build it,
+  default off.** Every `EditCommand` carries the volume it moved from the start, because
+  threading volume through the edit path later would touch every command variant. Whether
+  that volume must be deposited, hauled, or discarded is a game-layer rule behind a flag,
+  decided once terrain editing is playable at M4B.
 - ~~Whether heightfield is sufficient once digging is a core mechanic.~~ **Closed by `ADR-0013`**: heightfield, Valheim-style editing, verticality via structures. Tile layout can be fixed at M1 without risk.
-- Whether mines and tunnels are wanted as content. If so they are placed structures with their own meshes and colliders, which is a content problem rather than an engine one — but the structure-siting path (above) should be checked against that use case at M4B.
+- ~~Whether mines and tunnels are wanted as content.~~ Decided: **yes**, as placed
+  structures with their own meshes and colliders — `ADR-0013` makes terrain a heightfield
+  with no overhangs, so there is no other way to express them, and this stays a content
+  problem rather than an engine one. **The structure-siting path must be validated against
+  a tunnel entrance at M4B**, while siting is still cheap to change: an entrance is the
+  awkward case, because it sits at an edited slope face rather than on flat ground.

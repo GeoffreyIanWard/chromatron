@@ -111,4 +111,9 @@ Additionally, each module gets a smoke profile of *itself plus its required depe
 
 ## Open questions
 
-- Whether modules should be able to *replace* a capability provider (an alternative hydrology implementation) or only add. Replacement is more powerful and more dangerous. Start with add-only plus explicit exclusivity errors; revisit if a second implementation of anything is ever actually wanted.
+- ~~Whether modules should be able to *replace* a capability provider or only add.~~
+  Decided: **add-only**, with two modules exclusively providing the same capability being a
+  startup error that names both. Replacement is more powerful and more dangerous, and
+  nothing in the doc set currently wants a second implementation of anything. Revisit if
+  and when one actually exists — a real alternative implementation is a far better guide to
+  the right semantics than a hypothetical one.
