@@ -1,7 +1,7 @@
 ---
 id: S02
 title: ECS Core
-status: not started
+status: partial
 depends_on: [S01]
 provides: [world, queries, schedules, commands, change-detection, hierarchy]
 crates_touched: [cx-ecs]
@@ -37,6 +37,25 @@ Not writing an ECS. Not supporting dynamic component registration from scripts a
 - A scenario run with thread count 1, 4, and 16 produces identical state hashes for 10,000 ticks.
 - Structural changes issued mid-iteration are visible only after `StructuralApply`, verified by test.
 
+## What is implemented
+
+`Phase`, `SimWorld`, `SimSchedule`, deferred structural change, bulk spawn, and
+deterministic iteration. **Not yet**: `EventQueue<T>`, the `Parent`/`Children` hierarchy with
+cycle detection, change-detection wrappers beyond re-exporting `Added`/`Changed`, and
+ordering constraints expressed against capabilities rather than phases. None block M0's
+gates; all are needed before M6.
+
 ## Open questions
 
-- Whether `bevy_ecs` relations (if stabilized by implementation time) should replace the hand-rolled hierarchy. Revisit at M6 when agents need ownership graphs.
+- ~~Whether `bevy_ecs` relations should replace the hand-rolled hierarchy.~~ Materially
+  changed: `bevy_ecs` 0.19 ships `ChildOf`, `Children`, and a relationship system in its
+  prelude, so the hand-rolled hierarchy this spec describes may be redundant before it is
+  written. Still decided at M6 as planned, but the likely answer is now "use the built-in
+  one" — evaluate it rather than writing the alternative first.
+- `bevy_ecs` 0.19 stores **resources as entities** (`IsResource`). Anything counting or
+  hashing entities must exclude them, and `cx-diag`'s state hash (S14) needs the same care
+  `SimWorld::entity_count` now takes.
+- Derive macros (`#[derive(Component)]`) expand to absolute `bevy_ecs::` paths, so any crate
+  that *defines* components needs `bevy_ecs` as a direct dependency — re-exporting through
+  `cx-ecs` is not sufficient. That weakens the "one crate to touch on an ECS change" goal;
+  a `cx-ecs` derive re-export shim is possible if this becomes annoying.

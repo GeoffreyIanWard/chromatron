@@ -1,7 +1,7 @@
 ---
 id: S06
 title: Field Grids & Chunk Storage
-status: not started
+status: partial
 depends_on: [S01]
 provides: [field-storage, kernels, halos, sampling, deposit-buffer]
 crates_touched: [cx-fields]
@@ -39,6 +39,20 @@ No physics of the fields themselves — the kernels that model water and erosion
 - Deposit buffer produces bit-identical results across thread counts 1, 4, 16 over 10,000 ticks.
 - Quantized `u8` field round-trips within its declared precision; the quantization error is reported at registration, not discovered later.
 - Zero allocations per tick in the steady state.
+
+## What is implemented
+
+`f32` chunked SoA storage with lazy allocation, halo rings and exchange, the double-buffered
+kernel harness, bilinear and nearest sampling, the deterministic deposit buffer, and
+tile dirty tracking.
+
+**Not yet**, and all needed before M4 rather than M0: quantized element types (`u8`/`u16`/`f16`)
+with declared quantization error — the memory budget in `bench/memory-budget.md` assumes these
+and is not reachable without them; derived fields with refresh-on-dirty (`WATER_DEPTH`);
+`optional_field(id)` resolved at schedule-build time; and row-band parallelism within a chunk.
+
+Measured at M0: 16M-cell 5-point stencil 2.52 ms against a 12 ms budget, halo exchange
+for 16 chunks 100 µs against 1 ms.
 
 ## Open questions
 

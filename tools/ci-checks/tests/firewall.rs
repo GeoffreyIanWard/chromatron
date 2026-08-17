@@ -91,7 +91,56 @@ fn node_by_id<'a>(nodes: &'a [Node], id: &PackageId) -> &'a Node {
         .expect("every resolved package should have a graph node")
 }
 
-/// Every package reachable from `root` through normal and build dependencies.
+/// Whether `parent` actually builds `child`, as opposed to merely listing it.
+///
+/// `cargo metadata`'s resolve graph includes **optional** dependencies whether or
+/// not the feature gating them is enabled. Walking it naively reports
+/// dependencies that are never compiled — the first live run of this check
+/// flagged `cx-ecs -> bevy_ecs -> bevy_reflect -> wgpu-types`, which does not
+/// exist in any build we produce, because `bevy_reflect`'s `wgpu-types` feature
+/// is off.
+///
+/// A firewall that cries wolf gets switched off, so an optional dependency
+/// counts only when some enabled feature of the parent actually turns it on.
+fn is_activated(metadata: &Metadata, parent: &Node, child_name: &str) -> bool {
+    let parent_package = &metadata[&parent.id];
+
+    let declared_optional = parent_package
+        .dependencies
+        .iter()
+        .filter(|dependency| {
+            matches!(
+                dependency.kind,
+                DependencyKind::Normal | DependencyKind::Build
+            )
+        })
+        .any(|dependency| dependency.name == child_name && dependency.optional);
+
+    if !declared_optional {
+        return true;
+    }
+
+    // Enabled either by a feature named after the dependency, or by any enabled
+    // feature whose expansion mentions `dep:child` or `child/...`.
+    parent.features.iter().any(|feature| {
+        let feature = feature.as_str();
+        feature == child_name
+            || parent_package
+                .features
+                .iter()
+                .find(|(name, _)| name.as_str() == feature)
+                .map(|(_, expansions)| expansions)
+                .is_some_and(|expansions| {
+                    expansions.iter().any(|entry| {
+                        entry.as_str() == format!("dep:{child_name}")
+                            || entry.as_str().starts_with(&format!("{child_name}/"))
+                    })
+                })
+    })
+}
+
+/// Every package reachable from `root` through normal and build dependencies
+/// that are actually built.
 ///
 /// Dev-dependencies are deliberately excluded: a sim crate's *tests* may use
 /// whatever they like, since test code never ships inside the simulation.
@@ -106,7 +155,8 @@ fn transitive_deps(metadata: &Metadata, root: &str) -> BTreeSet<String> {
     let mut queue = vec![root_id];
 
     while let Some(id) = queue.pop() {
-        for dep in &node_by_id(&resolve.nodes, &id).deps {
+        let node = node_by_id(&resolve.nodes, &id);
+        for dep in &node.deps {
             let ships_in_the_binary = dep
                 .dep_kinds
                 .iter()
@@ -116,6 +166,10 @@ fn transitive_deps(metadata: &Metadata, root: &str) -> BTreeSet<String> {
             }
 
             let name = metadata[&dep.pkg].name.to_string();
+            if !is_activated(metadata, node, &name) {
+                continue;
+            }
+
             if seen.insert(name) {
                 queue.push(dep.pkg.clone());
             }

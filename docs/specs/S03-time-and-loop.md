@@ -1,7 +1,7 @@
 ---
 id: S03
 title: Time & Game Loop
-status: not started
+status: partial
 depends_on: [S01, S02]
 provides: [tick-clock, fixed-timestep, interpolation, speed-control, headless-driver]
 crates_touched: [cx-time, cx-app]
@@ -44,8 +44,27 @@ Variable-timestep simulation. Frame-rate-dependent logic of any kind. Both are b
 - Pausing, stepping 5 ticks, and resuming yields the same state as running 5 ticks continuously.
 - An injected 2-second stall causes no more than `MAX_CATCHUP` ticks in the following frame, and emits the diagnostic.
 
+## What is implemented
+
+`TickClock` with the integer accumulator, validated `TickRate` (10–120 Hz), `TimeControl`
+(pause / play / step), the frame-delta clamp and catch-up cap, `alpha` for interpolation,
+`HeadlessDriver`, and a `PacedDriver` that is the tick-counting half of the eventual
+`WindowedDriver`.
+
+**Not yet**: frame pacing to a display, `PreviousTransform` copying and the extract blend
+(both need `cx-view` at M1), and the S09 hand-off where acceleration above ~20x reduces
+per-tick work rather than running more ticks — `TimeControl::multiplier` exposes what S09
+will need.
+
 ## Open questions
 
+- **`MAX_CATCHUP` is unreachable at 30 Hz.** The frame-delta clamp (250 ms) admits at most
+  7.5 ticks at 30 Hz, so the catch-up cap of 8 can never bind — the clamp always does first.
+  The two constants come from different paragraphs of this spec and were never reconciled.
+  Both guards now report `fell_behind`, so nothing is silently dropped, but one of the two
+  numbers should move: either the clamp rises to ~300 ms so the cap is the real limit, or
+  the cap drops to 7 so it is honest. Discovered by a test that asserted the documented
+  behaviour and failed.
 - ~~Whether sub-30 Hz tick rates are wanted for the largest scenarios.~~ Decided: support a
   configurable rate now (see Requirements). Deciding *which* rate a given large scenario
   should use is still an M4 question, but the mechanism no longer blocks on that, and the
