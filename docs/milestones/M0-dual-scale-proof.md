@@ -81,11 +81,21 @@ because the gap between the two is itself useful information when a gate later d
 | Module set in 10 shuffled orders | identical schedule hash | identical | identical | resolves in 1.2 µs |
 | Disabling a module | zero systems, zero field bytes | verified | verified | |
 | Each module's own smoke profile | passes | — | passes | one module exists (`fields`) |
+| Peak memory, 16 chunks + 1M entities | < 8 GiB | 0.61 GiB | n/a | 13x headroom; see caveat |
 
 **The determinism gates pass but are not yet adversarial.** `cx-ecs` exposes no parallel
 iteration, so the scenario's systems are deterministic by construction rather than by
 discipline. They are a regression guard today and become a real proof when agents
 parallel-iterate at M6 — recorded as an open question in S14 rather than left implied.
+
+**The memory result is a floor, not a validation of the budget.** 0.61 GiB against 8 GiB is
+comfortable, but the M0 configuration is much lighter than the one `bench/memory-budget.md`
+describes: four `f32` fields against its eleven, and four small components per entity (32 B)
+against its ~700 B/entity across realistic archetypes. What this proves is that the M0 exit
+configuration fits with room to spare — not that the shipping budget holds. The budget gets
+tested for real at M4, when the solvers register their fields and entities carry their full
+component sets. The number to watch there is field storage, which is 514 MB unquantized for
+four fields at 16 chunks.
 
 **The two scale claims this milestone exists to test both pass on CI with real margin.** The
 tightest is the field stencil at 2.6x, which is the number to watch as ecology and

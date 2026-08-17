@@ -65,6 +65,31 @@ Budgets above assume the `game` profile. A disabled module's fields are **never 
 
 `cx-diag` reports live memory per module, so a module that quietly grows shows up against its own line rather than a subsystem aggregate.
 
+## How it is measured
+
+Peak RSS from `/proc/self/status`'s `VmHWM` — the process high water mark, which is what a
+budget is about. Allocator accounting was rejected: it misses page-level behaviour and
+memory-mapped regions, and counts freed-but-unreturned arena space the OS may have reclaimed.
+
+**Linux only, deliberately.** macOS and Windows equivalents need FFI and neither gates: this
+file names Linux as the reference and the CI gates job runs on `ubuntu-latest`. On other
+platforms the benchmark builds the same world and reports that it did not measure, rather
+than passing quietly.
+
+**The M0 measurement is the unquantized worst case.** Quantized element types are not
+implemented yet (S06), so `memory_16_chunks_1m_entities` gates on four `f32` fields where the
+table above assumes `u8`, `u16`, and `f16`. If that gate ever fails, implementing
+quantization is the first lever — ahead of reducing `CELLS_PER_CHUNK_EDGE`.
+
+## Measured at M0
+
+Peak RSS 0.61 GiB for 16 chunks and 1,000,000 entities, against the 8 GiB min-spec budget —
+of which 514 MB is unquantized field storage for four `f32` fields.
+
+This is a floor rather than a validation. The M0 configuration carries four fields against
+the eleven in the table above, and 32 B of components per entity against the ~700 B assumed
+here. The budget is tested properly at M4, once solvers register their fields.
+
 ## Enforcement
 
 - CI runs every milestone benchmark under the min-spec profile with a hard RSS cap; exceeding it fails the build.

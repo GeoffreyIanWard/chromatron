@@ -30,6 +30,7 @@ a note is a gate that stops meaning anything.
 | `per_module_smoke_profiles` | all pass | S20 |
 | `determinism_threads_1_4_16` | exact match, 10k ticks (`cargo test -p cx-diag`) | S14 |
 | `determinism_subprocess` | exact match, 10k ticks (`cargo test -p cx-diag`) | S14 |
+| `memory_16_chunks_1m_entities` | < 8 GiB peak RSS, Linux | `memory-budget.md` |
 | `graph_export_byte_identical` | exact, 10 shuffled orders | S21 |
 | `graph_export_minimal_profile` | < 500 ms, no tick run | S21 |
 
