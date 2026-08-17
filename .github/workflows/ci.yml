@@ -10,18 +10,32 @@ env:
   # A warning that is not an error is a warning that accumulates.
   RUSTFLAGS: -D warnings
 
+# Third-party actions are pinned to commit SHAs, not tags. A tag is mutable:
+# `@v2` can point at different code tomorrow with no commit in this repo and no
+# review, which is a supply-chain hole in something that runs with a token on
+# every push. The trailing comment records which tag the SHA came from so a
+# deliberate upgrade stays legible.
+#
+# The cache step is `continue-on-error` everywhere it appears. Caching is an
+# optimisation and must never be able to fail a build — the first three runs of
+# this workflow all lost jobs to codeload returning 429/503 while fetching the
+# cache action, on a docs-only change that had nothing to cache. A red X that
+# means nothing is worse than no signal at all, because it teaches everyone to
+# ignore the ones that do mean something.
+
 jobs:
   # The firewall runs on its own, first, and does not wait for the build matrix.
   # It is the cheapest check in the repo and the most expensive violation to
-  # discover late.
+  # discover late. It deliberately has no cache step: it builds one small test
+  # crate in about a minute, so a cache would save little and can only add a
+  # failure mode.
   firewall:
     name: dependency firewall
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install toolchain
         run: rustup show # honours rust-toolchain.toml
-      - uses: Swatinem/rust-cache@v2
       - run: cargo test -p ci-checks --test firewall
 
   check:
@@ -32,10 +46,11 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install toolchain
         run: rustup show
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        continue-on-error: true
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets
       - run: cargo test --workspace
@@ -48,10 +63,11 @@ jobs:
     name: m0 gates
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install toolchain
         run: rustup show
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        continue-on-error: true
       - name: M0 benchmark gates
         run: |
           features=""
