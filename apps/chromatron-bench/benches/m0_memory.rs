@@ -102,24 +102,44 @@ fn build_entities() -> SimWorld {
     world
 }
 
+/// Folds every component into one number.
+///
+/// Reads all four so none is dead code, and so the spawn cannot be elided.
+fn component_checksum(world: &mut SimWorld) -> f32 {
+    let mut query = world.query::<(&Position, &Velocity, &Energy, &Age)>();
+    query
+        .iter(world.inner())
+        .map(|(position, velocity, energy, age)| {
+            position.0.x + velocity.0.y + energy.0 + age.0 as f32
+        })
+        .sum()
+}
+
 fn bench_memory_16_chunks_1m_entities(_c: &mut Criterion) {
     let baseline = rss::peak_rss_bytes();
 
     let store = build_fields();
-    let world = build_entities();
+    let mut world = build_entities();
 
-    // Touch both so nothing is optimised away before the measurement.
+    // Read everything back. This is not ceremony: it keeps the components from
+    // being dead code, proves the entities hold what they were given, and means
+    // nothing can be optimised away before the measurement.
     let field_bytes: usize = FIELDS
         .iter()
         .map(|(id, _)| store.allocated_bytes(*id))
         .sum();
     let entities = world.entity_count();
+    let checksum = component_checksum(&mut world);
 
     assert_eq!(
         entities, ENTITY_COUNT,
         "the world should hold the entities it was given"
     );
     assert!(field_bytes > 0, "field storage should be allocated");
+    assert!(
+        checksum.is_finite(),
+        "component data should be readable, got {checksum}"
+    );
 
     let Some(peak) = rss::peak_rss_bytes() else {
         // Not a silent pass: the benchmark reports that it could not measure,
