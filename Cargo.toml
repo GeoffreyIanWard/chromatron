@@ -60,6 +60,12 @@ tracing-subscriber = { version = "=0.3.20", features = ["env-filter"] }
 criterion = "=0.7.0"
 cargo_metadata = "=0.23.0"
 
+# Presentation side. Exact pins for the same reason as everything else: a bump
+# is a deliberate task. `wgpu` may only be a direct dependency of `cx-render`
+# (ADR-0005, ADR-0010) — enforced by tools/ci-checks.
+wgpu = "=30.0.0"
+pollster = "=1.0.1"
+
 # Internal.
 cx-core = { path = "crates/cx-core" }
 cx-module = { path = "crates/cx-module" }
