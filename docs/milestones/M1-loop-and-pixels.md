@@ -42,36 +42,29 @@ First frame on screen, and — more importantly — the first proof that the sim
 | `render_100k_instances_fps` — draw-call clause | < 20 | **1** | instancing; runs anywhere |
 | `render_100k_instances_fps` — fps clause | ≥ 60 fps | not measured | needs hardware, see below |
 
-## Open question: three M1 gates need a GPU that CI does not have
+## Resolved: how the GPU-dependent gates are measured
 
 `render_100k_instances_fps`, `frame_time_p99_30hz_sim_144hz_render`, and
-`debug_draw_10k_lines` all need a working graphics device. GitHub's standard runners have
-none, and the milestone rule says a milestone is not complete until its benchmarks pass in
-CI. As written, M1 cannot complete.
+`debug_draw_10k_lines` need a graphics device, and GitHub's standard runners have no GPU.
+Rather than exempt rendering from the gate rule, each gate is **split by what can be
+measured honestly where**:
 
-Three ways out, and they are not exclusive:
+| Clause | Where it runs | Why |
+|---|---|---|
+| Draw-call counts, pixel correctness, zero validation errors | CI, on lavapipe | Hardware-independent properties. Identical on a laptop, a runner, and a workstation. |
+| CPU-side frame cost (extract, encode, submit) | CI | The half of frame time this project controls. Arrives with `WindowedDriver`. |
+| Absolute frame rate | Named reference hardware, recorded in `bench/baselines.md` | A number from a software rasterizer is not comparable to a GPU. Recording it with its hardware is the same pattern M0's CI/dev columns already use. |
 
-1. **Software rasterizer in CI** (lavapipe for Vulkan on Linux). wgpu runs against it, so the
-   pipeline builds, draws, and reports draw-call counts — but frame rates from a software
-   rasterizer are meaningless, so only the *correctness* half of these gates would move.
-2. **A self-hosted runner with a GPU.** Real numbers, real cost and maintenance.
-3. **Split the gates**: correctness in CI (draw-call count, zero validation errors, no
-   pipeline rebuilds per frame), and frame rate measured on a named developer machine and
-   recorded in `bench/baselines.md` the way the CI/dev columns already are for M0.
+A self-hosted GPU runner was rejected rather than deferred: this repository is public, so a
+self-hosted runner would let anyone opening a pull request execute code on that machine.
+That is a security tradeoff, not a cost tradeoff, and it is not worth making for a frame-rate
+number that can be recorded by hand.
 
-Leaning 1 plus 3: run everything that can be checked without a real GPU in CI, and treat
-frame rate as a recorded measurement against reference hardware rather than a gate a shared
-runner could ever honestly enforce. That keeps the gate rule meaningful instead of quietly
-exempting the rendering work from it.
-
-**Option 1 is now demonstrably viable.** `cx-render` acquires a device, draws, and reads
-pixels back with no window; the draw-call clause of `render_100k_instances_fps` is asserted
-as an ordinary test (`crates/cx-render/tests/draw_calls.rs`) and passes in 0.24 s. So the
-split is not hypothetical: the half that needs no hardware already runs everywhere, and the
-outstanding decision is narrowed to how the *frame rate* half gets measured.
-
-**This needs deciding before the renderer lands**, because it determines whether S12 is
-written to be testable headlessly or not.
+**Skipping is no longer silent.** Renderer tests skip when no adapter exists, so a bare
+container stays usable — but cargo swallows a passing test's output, which meant a green CI
+run was indistinguishable from one that rendered nothing. CI now sets `CX_REQUIRE_GPU=1`,
+which turns a missing adapter into a failure. Locally the variable is unset and the skip
+still applies.
 
 ## Notes
 

@@ -413,13 +413,7 @@ mod tests {
     use super::*;
 
     fn setup() -> Option<(RenderDevice, InstancedRenderer)> {
-        let device = match RenderDevice::headless() {
-            Ok(device) => device,
-            Err(error) => {
-                println!("skipping: no graphics adapter ({error})");
-                return None;
-            }
-        };
+        let device = crate::testing::device_or_skip()?;
         let renderer = InstancedRenderer::new(&device, &MeshData::unit_cube())
             .expect("the cube pipeline should build on any adapter");
         Some((device, renderer))

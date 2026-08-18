@@ -2,6 +2,11 @@
 
 Every number here is a **CI gate**. A milestone is not complete until its section passes on both the desktop profile and the memory-constrained profile.
 
+**GPU-dependent gates are split by what can be measured honestly.** Draw-call counts and
+pixel correctness run in CI against a software rasterizer (lavapipe); absolute frame rates
+are recorded against named hardware, because a frame rate from a software rasterizer is not
+comparable to one from a GPU. See `milestones/M1-loop-and-pixels.md`.
+
 Reference hardware: 8 physical cores, 32 GB RAM, mid-range discrete GPU. Profiles are *desktop* (12 GB) and *min-spec* (8 GB); see `memory-budget.md`. Numbers are 95th-percentile over 1,000 runs unless noted. When hardware changes, re-baseline in one commit and note the change here — never silently loosen a gate.
 
 ## Baseline changes

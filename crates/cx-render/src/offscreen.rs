@@ -212,20 +212,7 @@ pub(crate) fn copy_texture_to_readback(
 mod tests {
     use super::*;
 
-    /// Skips rather than fails when no adapter exists.
-    ///
-    /// A developer machine and a CI runner with lavapipe both run this; a bare
-    /// container legitimately cannot, and turning that into a red build would
-    /// teach everyone to ignore it.
-    fn device_or_skip() -> Option<RenderDevice> {
-        match RenderDevice::headless() {
-            Ok(device) => Some(device),
-            Err(error) => {
-                println!("skipping: no graphics adapter ({error})");
-                None
-            }
-        }
-    }
+    use crate::testing::device_or_skip;
 
     #[test]
     fn a_cleared_target_reads_back_the_clear_colour() {
