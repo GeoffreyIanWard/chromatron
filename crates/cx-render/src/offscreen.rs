@@ -47,7 +47,7 @@ impl Readback {
 /// `Rgba8UnormSrgb` matches what a surface will present, so a readback compares
 /// against the same colours the window would show. Every adapter supports it,
 /// including software ones.
-const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+pub(crate) const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
 /// Row alignment `copy_texture_to_buffer` requires.
 const COPY_ALIGNMENT: u32 = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
@@ -87,19 +87,6 @@ impl RenderDevice {
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Rows in the copy destination must be 256-byte aligned, which is almost
-        // never the natural row length. The padding is stripped after mapping so
-        // it never reaches a caller.
-        let unpadded_row_bytes = width * 4;
-        let padded_row_bytes = unpadded_row_bytes.div_ceil(COPY_ALIGNMENT) * COPY_ALIGNMENT;
-
-        let readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("cx-render readback"),
-            size: u64::from(padded_row_bytes) * u64::from(height),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("cx-render clear"),
         });
@@ -128,67 +115,97 @@ impl RenderDevice {
             });
         }
 
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
+        copy_texture_to_readback(device, queue, encoder, &texture, width, height)
+    }
+}
+
+/// Copies a rendered texture into a mappable buffer and reads it back.
+///
+/// Shared by every offscreen path, because the row-padding arithmetic is the
+/// part that silently corrupts an image and duplicating it would mean
+/// duplicating that risk.
+pub(crate) fn copy_texture_to_readback(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    mut encoder: wgpu::CommandEncoder,
+    texture: &wgpu::Texture,
+    width: u32,
+    height: u32,
+) -> Result<Readback, RenderError> {
+    // Rows in the copy destination must be 256-byte aligned, which is almost
+    // never the natural row length. The padding is stripped after mapping so it
+    // never reaches a caller.
+    let unpadded_row_bytes = width * 4;
+    let padded_row_bytes = unpadded_row_bytes.div_ceil(COPY_ALIGNMENT) * COPY_ALIGNMENT;
+
+    let readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("cx-render readback"),
+        size: u64::from(padded_row_bytes) * u64::from(height),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &readback_buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded_row_bytes),
+                rows_per_image: Some(height),
             },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &readback_buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(padded_row_bytes),
-                    rows_per_image: Some(height),
-                },
-            },
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
-
-        queue.submit(std::iter::once(encoder.finish()));
-
-        let slice = readback_buffer.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |_| {});
-
-        // Blocking here is correct: this is a readback, which is inherently a
-        // synchronisation point. The per-frame path never does this.
-        device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .map_err(|source| RenderError::ReadbackFailed {
-                reason: source.to_string(),
-            })?;
-
-        let mapped = slice
-            .get_mapped_range()
-            .map_err(|source| RenderError::ReadbackFailed {
-                reason: source.to_string(),
-            })?;
-        let mut pixels = Vec::with_capacity((unpadded_row_bytes * height) as usize);
-        for row in 0..height {
-            let start = (row * padded_row_bytes) as usize;
-            let end = start + unpadded_row_bytes as usize;
-            let Some(row_bytes) = mapped.get(start..end) else {
-                return Err(RenderError::ReadbackFailed {
-                    reason: format!("mapped buffer was shorter than the {height}-row copy"),
-                });
-            };
-            pixels.extend_from_slice(row_bytes);
-        }
-
-        drop(mapped);
-        readback_buffer.unmap();
-
-        Ok(Readback {
+        },
+        wgpu::Extent3d {
             width,
             height,
-            pixels,
-        })
+            depth_or_array_layers: 1,
+        },
+    );
+
+    queue.submit(std::iter::once(encoder.finish()));
+
+    let slice = readback_buffer.slice(..);
+    slice.map_async(wgpu::MapMode::Read, |_| {});
+
+    // Blocking here is correct: a readback is inherently a synchronisation
+    // point. The per-frame present path never does this.
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .map_err(|source| RenderError::ReadbackFailed {
+            reason: source.to_string(),
+        })?;
+
+    let mapped = slice
+        .get_mapped_range()
+        .map_err(|source| RenderError::ReadbackFailed {
+            reason: source.to_string(),
+        })?;
+
+    let mut pixels = Vec::with_capacity((unpadded_row_bytes * height) as usize);
+    for row in 0..height {
+        let start = (row * padded_row_bytes) as usize;
+        let end = start + unpadded_row_bytes as usize;
+        let Some(row_bytes) = mapped.get(start..end) else {
+            return Err(RenderError::ReadbackFailed {
+                reason: format!("mapped buffer was shorter than the {height}-row copy"),
+            });
+        };
+        pixels.extend_from_slice(row_bytes);
     }
+
+    drop(mapped);
+    readback_buffer.unmap();
+
+    Ok(Readback {
+        width,
+        height,
+        pixels,
+    })
 }
 
 #[cfg(test)]

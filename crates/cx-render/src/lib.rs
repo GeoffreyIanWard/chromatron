@@ -25,10 +25,16 @@
 //! meaningful; see `docs/milestones/M1-loop-and-pixels.md` for how that is
 //! being handled.
 
+pub mod camera;
 pub mod device;
 pub mod error;
+pub mod instanced;
+pub mod mesh;
 pub mod offscreen;
 
+pub use camera::Camera;
 pub use device::{Backend, DeviceInfo, DeviceKind, RenderDevice};
 pub use error::RenderError;
+pub use instanced::{DrawStats, InstancedRenderer};
+pub use mesh::{MeshData, Vertex};
 pub use offscreen::{Readback, Rgba};

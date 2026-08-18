@@ -12,7 +12,7 @@
 /// glam is re-exported rather than depended on directly by other crates, so the
 /// version is pinned in exactly one place (S01).
 pub use glam;
-pub use glam::{IVec2, Quat, Vec2, Vec3, Vec3Swizzles};
+pub use glam::{IVec2, Mat4, Quat, Vec2, Vec3, Vec3Swizzles, Vec4};
 
 /// Edge length of a chunk, in metres.
 pub const CHUNK_SIZE: f32 = 512.0;
