@@ -40,6 +40,14 @@ pub enum RenderError {
         height: u32,
     },
 
+    /// A mesh with no triangles was handed to the renderer.
+    #[error(
+        "mesh has no indices: there is nothing to draw. An empty mesh is almost always a \
+         loading failure rather than an intent, so it is rejected when the pipeline is built \
+         rather than silently drawing nothing every frame."
+    )]
+    EmptyMesh,
+
     /// Reading pixels back from the GPU failed.
     #[error("reading back from the GPU failed: {reason}")]
     ReadbackFailed {

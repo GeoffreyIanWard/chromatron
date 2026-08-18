@@ -38,7 +38,7 @@ a note is a gate that stops meaning anything.
 
 | Benchmark | Target | Spec |
 |---|---|---|
-| `render_100k_instances_fps` | ≥ 60 fps, < 20 draw calls — **needs a GPU, see M1 open question** | S12 |
+| `render_100k_instances_fps` | ≥ 60 fps (**needs a GPU**), < 20 draw calls (`cargo test -p cx-render`) | S12 |
 | `frame_time_p99_30hz_sim_144hz_render` | < 8 ms | S03 |
 | `extract_100k_instances` | < 2 ms (no GPU needed) | S12 |
 | `debug_draw_10k_lines` | < 1 ms | S12 |

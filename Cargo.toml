@@ -65,6 +65,7 @@ cargo_metadata = "=0.23.0"
 # (ADR-0005, ADR-0010) — enforced by tools/ci-checks.
 wgpu = "=30.0.0"
 pollster = "=1.0.1"
+bytemuck = { version = "=1.25.2", features = ["derive"] }
 
 # Internal.
 cx-core = { path = "crates/cx-core" }

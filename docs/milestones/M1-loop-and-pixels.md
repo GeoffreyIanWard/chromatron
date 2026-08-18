@@ -39,6 +39,8 @@ First frame on screen, and — more importantly — the first proof that the sim
 | Check | Budget | Dev | |
 |---|---|---|---|
 | `extract_100k_instances` | < 2 ms | 626 µs | 3.2x headroom |
+| `render_100k_instances_fps` — draw-call clause | < 20 | **1** | instancing; runs anywhere |
+| `render_100k_instances_fps` — fps clause | ≥ 60 fps | not measured | needs hardware, see below |
 
 ## Open question: three M1 gates need a GPU that CI does not have
 
@@ -61,6 +63,12 @@ Leaning 1 plus 3: run everything that can be checked without a real GPU in CI, a
 frame rate as a recorded measurement against reference hardware rather than a gate a shared
 runner could ever honestly enforce. That keeps the gate rule meaningful instead of quietly
 exempting the rendering work from it.
+
+**Option 1 is now demonstrably viable.** `cx-render` acquires a device, draws, and reads
+pixels back with no window; the draw-call clause of `render_100k_instances_fps` is asserted
+as an ordinary test (`crates/cx-render/tests/draw_calls.rs`) and passes in 0.24 s. So the
+split is not hypothetical: the half that needs no hardware already runs everywhere, and the
+outstanding decision is narrowed to how the *frame rate* half gets measured.
 
 **This needs deciding before the renderer lands**, because it determines whether S12 is
 written to be testable headlessly or not.
