@@ -258,6 +258,59 @@ fn banned_external_matcher_covers_crate_families() {
     }
 }
 
+/// The one crate permitted to name `wgpu` types (`ADR-0005`, `ADR-0010`).
+const RENDER_CRATE: &str = "cx-render";
+
+/// `wgpu` may be a direct dependency of `cx-render` and nothing else.
+///
+/// `ADR-0005` proposed a backend-agnostic render API so a console backend could
+/// be added later; `ADR-0010` put console out of scope, which removed that
+/// abstraction's only consumer. What survived is the **crate boundary**: no
+/// `wgpu` type appears outside `cx-render`, so graphics code cannot spread into
+/// gameplay and a future port stays a contained project.
+///
+/// Checked on *direct* dependencies rather than transitive ones, deliberately.
+/// `cx-app` will depend on `cx-render` and therefore link `wgpu` — that is the
+/// point of having a renderer. What must not happen is another crate declaring
+/// `wgpu` itself, because that is what naming its types requires.
+#[test]
+fn only_the_render_crate_depends_on_wgpu() {
+    let metadata = load_metadata();
+    let mut violations = Vec::new();
+
+    for package in metadata.workspace_packages() {
+        let name = package.name.to_string();
+        if name == RENDER_CRATE {
+            continue;
+        }
+
+        for dependency in &package.dependencies {
+            // Dev-dependencies are excluded for the same reason as elsewhere:
+            // test code never ships inside the engine. A test that wants to
+            // poke at wgpu directly is not spreading graphics into gameplay.
+            if dependency.kind != DependencyKind::Normal && dependency.kind != DependencyKind::Build
+            {
+                continue;
+            }
+
+            if is_banned_external(&dependency.name) {
+                violations.push(format!("  {name} → {}", dependency.name));
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "only `{RENDER_CRATE}` may depend on graphics, windowing, or audio crates \
+         directly:\n{}\n\n\
+         ADR-0010 kept the cx-render crate boundary after ADR-0005's abstraction was dropped: \
+         no wgpu type may appear outside it. If another crate needs something the renderer \
+         has, the renderer should expose it as plain data — that is what cx-view's \
+         ExtractedInstance is for.",
+        violations.join("\n")
+    );
+}
+
 /// The firewall lists above are hand-maintained, so they can silently fall out of
 /// date as crates are added. This makes that failure loud.
 #[test]
