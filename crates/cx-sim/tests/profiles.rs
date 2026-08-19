@@ -96,3 +96,60 @@ fn an_unknown_profile_is_an_error_rather_than_a_default() {
     assert!(cx_sim::by_name("terrian").is_none());
     assert!(cx_sim::by_name("").is_none());
 }
+
+/// Profiles differ from each other in the ways their names claim.
+///
+/// `spatial` is in `full-sim` but not in `terrain`: an index over sparse
+/// entities is worth nothing in a profile with no agents. A profile that
+/// silently carries every module is a profile whose name has stopped describing
+/// it, and the first symptom is a benchmark measuring work it was meant to
+/// exclude.
+#[test]
+fn profiles_are_not_all_the_same_set() {
+    let terrain = resolve("terrain");
+    let full = resolve("full-sim");
+
+    let has_spatial = |resolved: &Resolved| {
+        resolved
+            .modules()
+            .any(|record| record.id == cx_module::ModuleId("spatial"))
+    };
+
+    assert!(has_spatial(&full), "full-sim should index entities");
+    assert!(
+        !has_spatial(&terrain),
+        "terrain has no agents, so it should not carry an agent index"
+    );
+}
+
+/// Every system lands in the phase its module asked for.
+///
+/// The ordering that phase membership buys is the whole point of S02, and a
+/// system in the wrong phase is a determinism bug that shows up as a
+/// hard-to-place divergence rather than as a failure here.
+#[test]
+fn systems_run_in_the_phases_their_modules_declared() {
+    let resolved = resolve("full-sim");
+
+    let expected = [
+        ("generate_elevation", "ChunkLifecycle"),
+        ("exchange_halos", "FieldSolve"),
+        ("rebuild_spatial_index", "SpatialRebuild"),
+    ];
+
+    // Through `modules()` rather than `systems()`, because the phase lives on
+    // the declaration and `systems()` reports only the name and its module.
+    for (system, phase) in expected {
+        let found = resolved
+            .modules()
+            .flat_map(|record| record.systems.iter())
+            .find(|declared| declared.name == system)
+            .unwrap_or_else(|| panic!("{system} is not in full-sim"));
+
+        assert_eq!(
+            format!("{:?}", found.phase),
+            phase,
+            "{system} should run in {phase}"
+        );
+    }
+}

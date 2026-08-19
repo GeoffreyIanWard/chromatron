@@ -981,6 +981,7 @@ dependencies = [
  "cx-ecs",
  "cx-fields",
  "cx-module",
+ "cx-spatial",
  "cx-time",
  "cx-worldgen",
 ]
@@ -992,6 +993,13 @@ version = "0.1.0"
 [[package]]
 name = "cx-spatial"
 version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "cx-core",
+ "cx-ecs",
+ "cx-module",
+ "tracing",
+]
 
 [[package]]
 name = "cx-time"
