@@ -7,6 +7,9 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+# Debug-draw vertices go straight to the GPU as bytes; the derive is what makes
+# that a checked cast rather than a transmute.
+bytemuck.workspace = true
 cx-core.workspace = true
 cx-ecs.workspace = true
 

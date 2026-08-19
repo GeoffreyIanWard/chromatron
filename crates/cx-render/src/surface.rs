@@ -21,11 +21,12 @@
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use crate::camera::Camera;
+use crate::debug::{DebugPass, DebugStats};
 use crate::device::RenderDevice;
 use crate::error::RenderError;
-use crate::instanced::{DrawCall, DrawStats, InstancedRenderer, create_depth_target};
+use crate::frame::{FrameContents, FrameRenderer};
+use crate::instanced::{DrawCall, DrawStats, create_depth_target};
 use crate::offscreen::Rgba;
-use cx_view::ExtractedInstance;
 
 /// Anything that can host a surface.
 ///
@@ -71,8 +72,9 @@ impl SkipReason {
 /// an empty scene legitimately produces and the caller has to tell them apart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Presented {
-    /// The frame was drawn and handed to the compositor.
-    Drawn(DrawStats),
+    /// The frame was drawn and handed to the compositor, with what the scene
+    /// and the debug overlay each cost.
+    Drawn(DrawStats, DebugStats),
     /// The frame was skipped.
     Skipped(SkipReason),
 }
@@ -122,6 +124,8 @@ pub struct WindowSurface {
     // window found the difference the hard way: macOS presents
     // `Bgra8UnormSrgb`, and a mismatched pipeline is a fatal validation error.
     pipeline: wgpu::RenderPipeline,
+    /// The debug-line pipeline, for the same format and the same reason.
+    debug_pipeline: wgpu::RenderPipeline,
 }
 
 impl std::fmt::Debug for WindowSurface {
@@ -141,7 +145,7 @@ impl WindowSurface {
     /// would produce a black window with no explanation.
     pub fn new(
         device: &RenderDevice,
-        renderer: &InstancedRenderer,
+        renderer: &FrameRenderer,
         window: impl WindowTarget,
         width: u32,
         height: u32,
@@ -199,13 +203,19 @@ impl WindowSurface {
             "window surface configured"
         );
 
-        let pipeline = renderer.pipeline_for(device.wgpu_device(), config.format);
+        let pipeline = renderer
+            .instanced()
+            .pipeline_for(device.wgpu_device(), config.format);
+        let debug_pipeline = renderer
+            .debug()
+            .pipeline_for(device.wgpu_device(), config.format);
 
         Ok(Self {
             surface,
             config,
             depth,
             pipeline,
+            debug_pipeline,
         })
     }
 
@@ -249,9 +259,9 @@ impl WindowSurface {
     pub fn present(
         &mut self,
         device: &RenderDevice,
-        renderer: &InstancedRenderer,
+        renderer: &FrameRenderer,
         camera: &Camera,
-        instances: &[ExtractedInstance],
+        contents: FrameContents<'_>,
         clear: Rgba,
     ) -> Result<Presented, RenderError> {
         // Only `Validation` is a real failure. Everything else is a normal event
@@ -306,13 +316,15 @@ impl WindowSurface {
             .create_view(&wgpu::TextureViewDescriptor::default());
 
         let wgpu_device = device.wgpu_device();
-        let instance_buffer = renderer.upload_instances(wgpu_device, instances);
+        let instance_buffer = renderer
+            .instanced()
+            .upload_instances(wgpu_device, contents.instances);
 
         let mut encoder = wgpu_device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("cx-render present"),
         });
 
-        let stats = renderer.encode_draw(
+        let stats = renderer.instanced().encode_draw(
             device.wgpu_queue(),
             &mut encoder,
             DrawCall {
@@ -323,8 +335,25 @@ impl WindowSurface {
                 height: self.config.height,
                 camera,
                 instance_buffer: &instance_buffer,
-                instance_count: instances.len() as u32,
+                instance_count: contents.instances.len() as u32,
                 clear,
+            },
+        );
+
+        // Debug lines last, so they land on top of the scene they annotate.
+        let debug_buffer = renderer.debug().upload(wgpu_device, contents.debug);
+        let debug_stats = renderer.debug().encode(
+            device.wgpu_queue(),
+            &mut encoder,
+            &self.debug_pipeline,
+            &debug_buffer,
+            DebugPass {
+                target: &view,
+                depth: &self.depth,
+                width: self.config.width,
+                height: self.config.height,
+                camera,
+                vertices: contents.debug,
             },
         );
 
@@ -334,16 +363,18 @@ impl WindowSurface {
         // the frame.
         queue.present(frame);
 
-        Ok(Presented::Drawn(stats))
+        Ok(Presented::Drawn(stats, debug_stats))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::instanced::{InstancedRenderer, OffscreenTarget};
     use crate::mesh::MeshData;
     use crate::testing::device_or_skip;
-    use cx_core::math::{Quat, Vec3};
+    use cx_core::math::{ChunkCoord, Quat, Vec3, WorldPos};
+    use cx_view::{DebugColour, DebugDraw, ExtractedInstance};
 
     /// What a surface actually presents on macOS. The offscreen target is
     /// `Rgba8UnormSrgb`, so this is the format the two paths disagree about.
@@ -403,23 +434,53 @@ mod tests {
         // pipeline shows up as a swapped byte rather than as nothing.
         let clear: Rgba = [0.8, 0.2, 0.05, 1.0];
 
-        let (bgra, stats) = renderer
+        // Debug lines go through their own pipeline, which has the same
+        // format-mismatch failure mode, so they are drawn here too.
+        let debug_renderer = crate::debug::DebugRenderer::new(&device);
+        let mut debug = DebugDraw::default();
+        debug.aabb(
+            WorldPos::new(ChunkCoord::new(0, 0), Vec3::splat(-0.75)),
+            WorldPos::new(ChunkCoord::new(0, 0), Vec3::splat(0.75)),
+            DebugColour::YELLOW,
+        );
+        let debug_vertices = debug.rebase(ChunkCoord::new(0, 0)).to_vec();
+
+        let (bgra, stats, debug_stats) = renderer
             .render_to_format(
                 &device,
-                crate::instanced::OffscreenTarget {
+                OffscreenTarget {
                     width: 64,
                     height: 64,
                     format: SURFACE_FORMAT,
                 },
                 &camera,
-                &instances,
+                FrameContents {
+                    instances: &instances,
+                    debug: &debug_vertices,
+                },
                 clear,
+                Some(&debug_renderer),
             )
             .expect("drawing to a surface-format target should work");
         assert_eq!(stats.draw_calls, 1);
+        assert_eq!(debug_stats.lines, 12, "an AABB is twelve lines");
 
-        let (rgba, _) = renderer
-            .render(&device, 64, 64, &camera, &instances, clear)
+        let (rgba, _, _) = renderer
+            .render_to_format(
+                &device,
+                OffscreenTarget {
+                    width: 64,
+                    height: 64,
+                    format: crate::offscreen::TARGET_FORMAT,
+                },
+                &camera,
+                FrameContents {
+                    instances: &instances,
+                    debug: &debug_vertices,
+                },
+                clear,
+                Some(&debug_renderer),
+            )
             .expect("drawing to the offscreen format should work");
 
         let bgra_corner = bgra.pixel(1, 1).expect("in bounds");

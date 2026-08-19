@@ -24,8 +24,10 @@ use cx_view::ExtractedInstance;
 use wgpu::util::DeviceExt as _;
 
 use crate::camera::Camera;
+use crate::debug::{DebugPass, DebugRenderer, DebugStats};
 use crate::device::RenderDevice;
 use crate::error::RenderError;
+use crate::frame::FrameContents;
 use crate::mesh::{MeshData, Vertex};
 use crate::offscreen::{Readback, Rgba};
 
@@ -87,8 +89,8 @@ impl InstanceRaw {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct CameraUniform {
-    view_projection: [[f32; 4]; 4],
+pub(crate) struct CameraUniform {
+    pub view_projection: [[f32; 4]; 4],
 }
 
 /// Depth format for offscreen targets.
@@ -96,7 +98,7 @@ struct CameraUniform {
 /// A depth buffer is not optional for solid geometry: without one, triangles
 /// draw in submission order and a cube shows whichever face happened to be last
 /// rather than whichever is nearest.
-const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+pub(crate) const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 /// How many draw calls a render issued.
 ///
@@ -176,6 +178,30 @@ pub(crate) struct OffscreenTarget {
     /// Colour format. Normally [`crate::offscreen::TARGET_FORMAT`]; a surface's
     /// format when checking the windowed path without a window.
     pub format: wgpu::TextureFormat,
+}
+
+/// The bind group layout every pipeline here uses for its camera uniform.
+///
+/// Shared with [`crate::debug`] rather than declared twice: the layout has to
+/// match the shader's `@group(0) @binding(0)`, and two copies of that agreement
+/// is one copy too many.
+pub(crate) fn camera_bind_group_layout(
+    device: &wgpu::Device,
+    label: &str,
+) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some(label),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::VERTEX,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        }],
+    })
 }
 
 /// Builds the draw pipeline for one colour format.
@@ -267,19 +293,7 @@ impl InstancedRenderer {
             mapped_at_creation: false,
         });
 
-        let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("cx-render camera layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
+        let camera_layout = camera_bind_group_layout(device, "cx-render camera layout");
 
         let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("cx-render camera bind group"),
@@ -378,7 +392,12 @@ impl InstancedRenderer {
                     view: depth,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Discard,
+                        // Stored, not discarded. This was `Discard` while nothing
+                        // read depth after the scene — then the debug pass
+                        // started to, and loaded undefined contents, and every
+                        // line silently failed its depth test. No error, no
+                        // warning: just no lines.
+                        store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
                 }),
@@ -438,7 +457,7 @@ impl InstancedRenderer {
         instances: &[ExtractedInstance],
         clear: Rgba,
     ) -> Result<(Readback, DrawStats), RenderError> {
-        self.render_to_format(
+        let (readback, stats, _) = self.render_to_format(
             render_device,
             OffscreenTarget {
                 width,
@@ -446,9 +465,14 @@ impl InstancedRenderer {
                 format: crate::offscreen::TARGET_FORMAT,
             },
             camera,
-            instances,
+            FrameContents {
+                instances,
+                debug: &[],
+            },
             clear,
-        )
+            None,
+        )?;
+        Ok((readback, stats))
     }
 
     /// [`InstancedRenderer::render`], into a target of a chosen colour format.
@@ -464,9 +488,10 @@ impl InstancedRenderer {
         render_device: &RenderDevice,
         target: OffscreenTarget,
         camera: &Camera,
-        instances: &[ExtractedInstance],
+        contents: FrameContents<'_>,
         clear: Rgba,
-    ) -> Result<(Readback, DrawStats), RenderError> {
+        debug: Option<&DebugRenderer>,
+    ) -> Result<(Readback, DrawStats, DebugStats), RenderError> {
         let OffscreenTarget {
             width,
             height,
@@ -480,7 +505,7 @@ impl InstancedRenderer {
         let device = render_device.wgpu_device();
         let queue = render_device.wgpu_queue();
 
-        let instance_buffer = self.upload_instances(device, instances);
+        let instance_buffer = self.upload_instances(device, contents.instances);
         let (colour_texture, colour_view) = create_colour_target(device, width, height, format);
 
         // Reuse the offscreen pipeline when the format matches, rather than
@@ -509,10 +534,40 @@ impl InstancedRenderer {
                 height,
                 camera,
                 instance_buffer: &instance_buffer,
-                instance_count: instances.len() as u32,
+                instance_count: contents.instances.len() as u32,
                 clear,
             },
         );
+
+        // Debug lines after the scene, on top of it, sharing its depth.
+        let debug_stats = match debug {
+            Some(debug) => {
+                let vertices = debug.upload(device, contents.debug);
+                let pipeline;
+                let debug_pipeline = if format == crate::offscreen::TARGET_FORMAT {
+                    debug.pipeline()
+                } else {
+                    pipeline = debug.pipeline_for(device, format);
+                    &pipeline
+                };
+
+                debug.encode(
+                    queue,
+                    &mut encoder,
+                    debug_pipeline,
+                    &vertices,
+                    DebugPass {
+                        target: &colour_view,
+                        depth: &depth_view,
+                        width,
+                        height,
+                        camera,
+                        vertices: contents.debug,
+                    },
+                )
+            }
+            None => DebugStats::default(),
+        };
 
         let readback = crate::offscreen::copy_texture_to_readback(
             device,
@@ -523,7 +578,7 @@ impl InstancedRenderer {
             height,
         )?;
 
-        Ok((readback, stats))
+        Ok((readback, stats, debug_stats))
     }
 }
 

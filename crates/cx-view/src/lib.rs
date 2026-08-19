@@ -34,6 +34,10 @@
     )
 )]
 
+pub mod debug;
+
+pub use debug::{DebugColour, DebugDraw, DebugVertex};
+
 use cx_core::math::{CHUNK_SIZE, ChunkCoord, Quat, Vec3};
 use cx_ecs::{PreviousTransform, SimWorld, Transform};
 
