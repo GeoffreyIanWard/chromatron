@@ -7,18 +7,22 @@
 //!
 //! # Why most of these are still thin
 //!
-//! Only `cx-fields` is a module so far. Worldgen, the solvers, agents, and
-//! physics register nothing yet, so `terrain` and `full-sim` currently resolve
-//! to the same set as `minimal`. Each fills in as its crate becomes a module,
-//! and the profile names exist now so that the CLI, the gates, and S20's profile
-//! rule have a stable surface to build against.
+//! `cx-fields` and `cx-worldgen` are modules; the solvers, agents, and physics
+//! register nothing yet, so `hydro` and `full-sim` still resolve to the same set
+//! as `terrain`. Each fills in as its crate becomes a module, and the profile
+//! names exist now so that the CLI, the gates, and S20's profile rule have a
+//! stable surface to build against.
 //!
 //! A profile that is thinner than its documentation is worth having anyway: the
 //! *mechanism* is what M0 needed to prove, and a named set that resolves, hashes,
-//! and exports is that proof.
+//! and exports is that proof. What `terrain` adds is the first profile that is
+//! genuinely *different* from `minimal` — two modules, a `requires` edge between
+//! them, and a field with an owner and a declared writer, which is the first
+//! graph with anything to look at.
 
 use cx_fields::FieldsModule;
 use cx_module::Profile;
+use cx_worldgen::WorldgenModule;
 
 /// Core, ECS, time, fields — the M0 benchmark set.
 pub fn minimal() -> Profile {
@@ -27,19 +31,25 @@ pub fn minimal() -> Profile {
 
 /// `minimal` plus worldgen, erosion, and rendering (S20).
 ///
-/// Currently identical to [`minimal`]: worldgen is M2.
+/// Erosion is still M2; what exists is base elevation (S07 step 1).
 pub fn terrain() -> Profile {
-    Profile::new("terrain").with::<FieldsModule>()
+    Profile::new("terrain")
+        .with::<FieldsModule>()
+        .with::<WorldgenModule>()
 }
 
 /// `terrain` plus climate and hydrology (S20). Solvers land at M4.
 pub fn hydro() -> Profile {
-    Profile::new("hydro").with::<FieldsModule>()
+    Profile::new("hydro")
+        .with::<FieldsModule>()
+        .with::<WorldgenModule>()
 }
 
 /// Every simulation module, headless (S20).
 pub fn full_sim() -> Profile {
-    Profile::new("full-sim").with::<FieldsModule>()
+    Profile::new("full-sim")
+        .with::<FieldsModule>()
+        .with::<WorldgenModule>()
 }
 
 /// `full-sim` minus the erosion generation stage (S20).
@@ -48,12 +58,16 @@ pub fn full_sim() -> Profile {
 /// erosion is an M2 generation stage — but the name resolves so nothing has to
 /// be renamed later.
 pub fn no_erosion() -> Profile {
-    Profile::new("no-erosion").with::<FieldsModule>()
+    Profile::new("no-erosion")
+        .with::<FieldsModule>()
+        .with::<WorldgenModule>()
 }
 
 /// Everything, including presentation (S20).
 pub fn game() -> Profile {
-    Profile::new("game").with::<FieldsModule>()
+    Profile::new("game")
+        .with::<FieldsModule>()
+        .with::<WorldgenModule>()
 }
 
 /// A profile by name, or `None` if unknown.

@@ -262,7 +262,21 @@ Three of its tests are about mistakes that produce *silence* rather than errors:
   as a tile that never rebuilds, one chunk-edge away from the edit that caused
   it.
 
-## The graph viewer's premise does not hold yet
+## The graph viewer's premise — now partly true
+
+**Update.** `cx-worldgen` is a module, so the graph is no longer a single box.
+`--profile terrain` now exports two modules, a `requires` edge between them, two
+systems in different phases, and a field with an owner and a declared writer:
+
+```
+modules 2 · capabilities 2 · systems 2 · field_access 1
+```
+
+Still small, but it has every *kind* of element the viewer draws, which is what a
+layout algorithm needs to be developed against. `cx-spatial`, `cx-agents`, and
+`cx-physics` are next.
+
+## The original finding, for the record
 
 M1 lists `tools/graph-viewer` and says it belongs here because M1 is "the first
 milestone with enough modules and systems registered for the diagram to be worth
@@ -290,9 +304,20 @@ arrow a shaft and four barbs. One primitive, one pipeline, one number to
 measure. Shapes are authored in `WorldPos` and rebased with the frame, like
 instances, so nothing has to know the current origin.
 
-**Marginal cost of 10,000 lines on an Apple M4 Pro: 1.02 ms** — 1.48 ms with the
-lines against 0.46 ms without, at 640x360. The budget is 1 ms. That is *on* the
-line, not under it.
+**Marginal cost of 10,000 lines**, at 640x360:
+
+| Device | Marginal | With lines | Without |
+|---|---|---|---|
+| Apple M4 Pro (Metal) — developer machine | **1.02 ms** | 1.48 ms | 0.46 ms |
+| `llvmpipe` (Vulkan, software) — Ubuntu runner | **23.38 ms** | 23.95 ms | 0.57 ms |
+
+The budget is 1 ms. On hardware that is *on* the line, not under it.
+
+The 23x spread is the case for recording rather than gating, made in one row: a
+threshold that lavapipe could pass would be meaningless on hardware, and one
+hardware can pass fails every Linux run. Note also that the *baseline* frames
+agree closely — 0.46 ms against 0.57 ms — so it is the drawing that diverges,
+not the loop around it.
 
 Measured as a difference rather than as a whole frame deliberately: reporting the
 frame would have credited debug draw with the simulation, the extract, and the

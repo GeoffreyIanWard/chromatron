@@ -13,6 +13,7 @@ cx-module.workspace = true
 cx-fields.workspace = true
 cx-time.workspace = true
 cx-diag.workspace = true
+cx-worldgen.workspace = true
 
 [lints]
 workspace = true
