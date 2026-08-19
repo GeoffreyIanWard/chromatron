@@ -661,6 +661,13 @@ version = "0.1.0"
 [[package]]
 name = "cx-app"
 version = "0.1.0"
+dependencies = [
+ "cx-core",
+ "cx-ecs",
+ "cx-render",
+ "cx-time",
+ "cx-view",
+]
 
 [[package]]
 name = "cx-audio"

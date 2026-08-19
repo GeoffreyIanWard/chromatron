@@ -41,6 +41,8 @@ First frame on screen, and — more importantly — the first proof that the sim
 | `extract_100k_instances` | < 2 ms | 626 µs | 3.2x headroom |
 | `render_100k_instances_fps` — draw-call clause | < 20 | **1** | instancing; runs anywhere |
 | `render_100k_instances_fps` — fps clause | ≥ 60 fps | not measured | needs hardware, see below |
+| `frame_time_p99_30hz_sim_144hz_render` — CPU clause | < 8 ms | **3.46 ms p99** | 10k entities, median 2.44 ms |
+| `frame_time_p99_30hz_sim_144hz_render` — GPU clause | < 8 ms | not measured | needs hardware |
 
 ## Resolved: how the GPU-dependent gates are measured
 
@@ -71,6 +73,17 @@ container stays usable — but cargo swallows a passing test's output, which mea
 run was indistinguishable from one that rendered nothing. CI now sets `CX_REQUIRE_GPU=1`,
 which turns a missing adapter into a failure. Locally the variable is unset and the skip
 still applies.
+
+## Known inefficiency in the frame path
+
+`InstancedRenderer::render` currently creates the colour target, the depth target, and the
+instance buffer **every frame**. That is wasteful and will show up in the CPU frame cost as
+scenes grow — the measured 3.46 ms p99 at 10,000 entities has headroom against the 8 ms
+budget, but that headroom is partly being spent on allocation that should not happen at all.
+
+Pooling those resources is the obvious fix and is deliberately not done yet: the loop needed
+to exist before it was worth optimising, and the gate now exists to show whether the fix
+helps. Worth doing before the instance count grows towards the 100,000 the render gate names.
 
 ## Notes
 

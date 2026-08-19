@@ -1,9 +1,15 @@
 # Determinism rules from 03-conventions.md / ADR-0004, enforced mechanically.
 #
-# These apply to every crate compiled in the workspace, but only crates that opt
-# into `[lints] workspace = true` (the sim side) deny them. Below the firewall
-# they are not enabled, because view-world code is rebuilt from scratch each
-# frame and its iteration order cannot influence sim state.
+# These apply to every crate compiled in the workspace. Note that
+# `clippy::disallowed_methods` and `disallowed_types` are warn-by-default, so CI's
+# `-D warnings` promotes them everywhere — not only in crates that opt into the
+# sim lint set via `[lints] workspace = true`.
+#
+# That is mostly what we want: the rules describe determinism hazards, and a
+# stray wall-clock read is worth a second look wherever it appears. Code that
+# legitimately needs one — a frame-cost measurement, for instance — takes an
+# explicit `#[allow]` with a justification, which keeps the exception visible in
+# review rather than hidden in a config file.
 
 disallowed-types = [
     { path = "std::collections::HashMap", reason = "iteration order is unspecified and varies per process; use IndexMap, BTreeMap, or a sorted Vec (ADR-0004)" },
