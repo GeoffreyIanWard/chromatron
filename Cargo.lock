@@ -847,6 +847,7 @@ name = "cx-app"
 version = "0.1.0"
 dependencies = [
  "cx-core",
+ "cx-diag",
  "cx-ecs",
  "cx-render",
  "cx-time",

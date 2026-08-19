@@ -26,7 +26,7 @@
 use bevy_ecs::component::Component;
 use bevy_ecs::entity::Entity;
 use cx_core::hash::{combine, mix64};
-use cx_ecs::SimWorld;
+use cx_ecs::{PreviousTransform, SimWorld, Transform};
 use cx_fields::{FieldId, FieldStore};
 
 /// A 128-bit digest of authoritative sim state.
@@ -97,6 +97,50 @@ impl StateHashable for cx_core::glam::Vec3 {
         let mut hash = mix64(self.x.to_bits() as u64);
         hash = combine(hash, self.y.to_bits() as u64);
         combine(hash, self.z.to_bits() as u64)
+    }
+}
+
+impl StateHashable for cx_core::glam::Quat {
+    fn state_hash(&self) -> u64 {
+        let mut hash = mix64(self.x.to_bits() as u64);
+        hash = combine(hash, self.y.to_bits() as u64);
+        hash = combine(hash, self.z.to_bits() as u64);
+        combine(hash, self.w.to_bits() as u64)
+    }
+}
+
+impl StateHashable for cx_core::math::WorldPos {
+    /// Hashes the chunk and the local offset separately.
+    ///
+    /// Not the absolute position: the whole point of the split is that the
+    /// absolute value is not representable without precision loss far from the
+    /// origin, so hashing it would make the digest disagree with itself out
+    /// there — exactly where determinism is hardest to debug.
+    fn state_hash(&self) -> u64 {
+        let mut hash = mix64(self.chunk.x as u32 as u64);
+        hash = combine(hash, self.chunk.z as u32 as u64);
+        combine(hash, self.local.state_hash())
+    }
+}
+
+impl StateHashable for Transform {
+    fn state_hash(&self) -> u64 {
+        let mut hash = self.position.state_hash();
+        hash = combine(hash, self.rotation.state_hash());
+        combine(hash, self.scale.state_hash())
+    }
+}
+
+impl StateHashable for PreviousTransform {
+    /// Hashed as authoritative state in its own right.
+    ///
+    /// It is tempting to treat it as derived and leave it out, but a run that
+    /// agreed on `Transform` while disagreeing on `PreviousTransform` would
+    /// render differently — interpolation blends between the two — while
+    /// reporting an identical state hash. That is the precise shape of a
+    /// determinism check that misleads.
+    fn state_hash(&self) -> u64 {
+        self.0.state_hash()
     }
 }
 

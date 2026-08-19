@@ -23,6 +23,9 @@ winit.workspace = true
 # See the workspace manifest and 03-conventions.md.
 [dev-dependencies]
 cx-time.workspace = true
+# Above the firewall, used only by tests: the determinism harness is what the
+# M1 state-equivalence criteria are checked with.
+cx-diag.workspace = true
 
 [lints.rust]
 unsafe_code = "warn"
