@@ -15,6 +15,7 @@ tracing.workspace = true
 wgpu.workspace = true
 pollster.workspace = true
 bytemuck.workspace = true
+raw-window-handle.workspace = true
 
 # Below the firewall: the strict sim lint set does not apply here.
 # See the workspace manifest and 03-conventions.md.

@@ -31,6 +31,7 @@ pub mod error;
 pub mod instanced;
 pub mod mesh;
 pub mod offscreen;
+pub mod surface;
 pub mod testing;
 
 pub use camera::Camera;
@@ -39,3 +40,4 @@ pub use error::RenderError;
 pub use instanced::{DrawStats, InstancedRenderer};
 pub use mesh::{MeshData, Vertex};
 pub use offscreen::{Readback, Rgba};
+pub use surface::{WindowSurface, WindowTarget};

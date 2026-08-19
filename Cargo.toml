@@ -66,6 +66,11 @@ cargo_metadata = "=0.23.0"
 wgpu = "=30.0.0"
 pollster = "=1.0.1"
 bytemuck = { version = "=1.25.2", features = ["derive"] }
+# The interop boundary between the renderer and the windowing library: cx-render
+# names these traits, cx-app supplies a winit window that implements them, and
+# neither crate learns about the other.
+raw-window-handle = "=0.6.2"
+winit = "=0.30.13"
 
 # Internal.
 cx-core = { path = "crates/cx-core" }
