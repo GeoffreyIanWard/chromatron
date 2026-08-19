@@ -20,7 +20,7 @@ First frame on screen, and — more importantly — the first proof that the sim
 - egui overlay with tick counter, frame graph, and time controls.
 - ~~Free-fly camera~~ **done** — `cx-app::flycam`, with the floating origin following it.
 - `tools/graph-viewer`: the isometric architecture viewer over the M0 graph export, with stable layout and `--baseline` diff (S21). Independent of the renderer above — it is a static page, not engine code — but it lands here because M1 is the first milestone with enough modules and systems registered for the diagram to be worth looking at.
-- **Tile layout fixed** (`TILE_CELLS = 64`, 256 tiles per chunk) and dirty-tracking bitsets stubbed in. Mesh layout depends on this and M4B cannot retrofit it (`ADR-0011`). Safe to fix now that `ADR-0013` settled terrain representation as a heightfield.
+- ~~**Tile layout fixed**~~ **done** — `TILE_CELLS = 64`, 256 tiles per chunk, with `cx_core::TileDirty` as the dirty-tracking bitset. Mesh layout depends on this and M4B cannot retrofit it (`ADR-0011`). Safe to fix now that `ADR-0013` settled terrain representation as a heightfield.
 
 ## Exit criteria
 
@@ -238,6 +238,50 @@ Two things were wrong and both are fixed:
 
 The simulation keeps ticking at 30 Hz throughout. Being behind another window is
 not being paused.
+
+## Tile granularity is fixed, and the bitset exists
+
+`ADR-0011` calls this the one part of the ADR that is not deferrable: mesh layout
+depends on tile size and M4B cannot retrofit a different one. The constants were
+already in `cx-core`; what was missing was the structure `TileCoord::index()`
+pointed at.
+
+`cx_core::TileDirty` is 256 bits — four `u64`s, 32 bytes, no allocation. A
+`HashSet<TileCoord>` was rejected for the usual reason plus a specific one:
+**rebuild order is observable**. Float accumulation over a region depends on the
+order the pieces are summed, so unspecified iteration order here would be a
+determinism bug that appears on some machines and not others (`ADR-0004`).
+
+Three of its tests are about mistakes that produce *silence* rather than errors:
+
+- A region handed its corners backwards marks the same tiles, rather than none.
+  Marking none looks exactly like the edit failing to apply.
+- The last cell of a tile belongs to that tile. The off-by-one leaves a one-cell
+  seam unrebuilt along every tile boundary.
+- Every tile gets its own bit — checked for all 256. An index collision shows up
+  as a tile that never rebuilds, one chunk-edge away from the edit that caused
+  it.
+
+## The graph viewer's premise does not hold yet
+
+M1 lists `tools/graph-viewer` and says it belongs here because M1 is "the first
+milestone with enough modules and systems registered for the diagram to be worth
+looking at". **That is not true as things stand.** Every profile currently
+exports the same graph:
+
+```
+modules 1 · capabilities 1 · systems 1 · field_access 0
+```
+
+Only `cx-fields` is a `Module`. S21 already recorded this — "the profiles are
+currently empty" — but M1's ordering was written as though it would have resolved
+by now, and it has not, because nothing since has required another crate to become
+a module.
+
+A viewer built against a one-node graph would be honest and useless, and worse,
+its layout and diff decisions would be made against a shape that tells us nothing
+about how they behave at fifty nodes. The dependency is real: the viewer should
+follow the modules, not lead them.
 
 ## Known inefficiency in the frame path
 
