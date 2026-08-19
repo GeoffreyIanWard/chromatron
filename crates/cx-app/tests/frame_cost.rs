@@ -1,37 +1,31 @@
-//! The CPU-side clause of `frame_time_p99_30hz_sim_144hz_render`
-//! (`bench/baselines.md#m1`).
+//! Frame-loop behaviour at 144 Hz, and a recorded frame cost.
 //!
-//! The gate asks for a 99th-percentile frame under 8 ms with a 30 Hz simulation
-//! rendered at 144 Hz. Like the other GPU-dependent gates, it splits into a part
-//! that can be measured honestly anywhere and a part that cannot:
+//! Related to `frame_time_p99_30hz_sim_144hz_render` (`bench/baselines.md#m1`),
+//! but deliberately **not** a timing gate. The reason is worth stating, because
+//! the first version of this file was one and it failed on every CI platform:
 //!
-//! - **CPU cost per frame** — running due ticks, extracting, encoding, and
-//!   submitting. This project's own work, and what this test measures.
-//! - **GPU cost per frame** — rasterization. Meaningless on a software adapter,
-//!   so it is recorded against named hardware instead.
+//! Skipping the pixel readback does not make a frame measurement CPU-only.
+//! `queue.submit` applies backpressure — when the GPU cannot keep up, submit
+//! blocks, and the GPU's cost lands in the wall-clock timing. On fast hardware
+//! that is invisible; on a software rasterizer it dominates. Measured p99 for
+//! the same code: 3.5 ms on an M4 Pro, 30 ms on lavapipe, 105 ms on WARP. Those
+//! are three measurements of three different GPUs, not of this project's code.
 //!
-//! No readback here, deliberately. Reading pixels back would block until the GPU
-//! finished, which would turn a CPU measurement into a measurement of lavapipe's
-//! fill rate — and would be wrong for a real loop besides.
-//!
-//! # Why a percentile rather than a mean
-//!
-//! Frame time is judged by its worst frames, not its average. A loop that
-//! averages 2 ms and spikes to 40 ms every thirtieth frame is visibly broken and
-//! has an excellent mean. Criterion reports means, so this collects its own
-//! samples and sorts them.
+//! So frame time is **recorded with the device that produced it**, exactly as
+//! the milestone decided for every other hardware-dependent number. What this
+//! test *asserts* is the part that is hardware-independent: that the loop runs
+//! the tick pattern a 30 Hz simulation at 144 Hz implies.
 
 #![allow(
     clippy::expect_used,
     clippy::unwrap_used,
     clippy::panic,
     clippy::indexing_slicing,
-    // clippy.toml bans wall-clock reads so that time cannot leak into sim logic
-    // and break determinism (ADR-0004). Measuring how long a frame took is the
-    // sanctioned exception: it is the *only* way to observe frame cost, it runs
-    // in a test rather than in the tick, and nothing it reads reaches sim state.
-    // Allowing it here rather than loosening the rule keeps the exception
-    // visible at the point it is taken.
+    // clippy.toml bans wall-clock reads so time cannot leak into sim logic and
+    // break determinism (ADR-0004). Reporting how long a frame took is the
+    // sanctioned exception: it runs in a test, and nothing it reads reaches sim
+    // state. The allow sits here rather than in the config so the exception is
+    // visible where it is taken.
     clippy::disallowed_methods
 )]
 
@@ -44,9 +38,6 @@ use cx_ecs::{Phase, PreviousTransform, Query, SimSchedule, SimWorld, Transform, 
 use cx_render::Camera;
 use cx_render::testing::device_or_skip;
 use cx_time::TickRate;
-
-/// The gate's budget.
-const BUDGET: Duration = Duration::from_millis(8);
 
 /// 144 Hz, the render rate the gate names.
 const FRAME_DELTA_US: u64 = 6_944;
@@ -80,15 +71,14 @@ fn build_world() -> (SimWorld, SimSchedule) {
 }
 
 fn percentile(sorted: &[Duration], fraction: f64) -> Duration {
-    // Nearest-rank: the smallest value at or above the requested fraction. With
-    // 300 samples the p99 is the 297th, which is a real observation rather than
-    // an interpolation between two.
+    // Nearest-rank: the smallest value at or above the requested fraction, so a
+    // reported figure is a real observation rather than an interpolation.
     let index = ((sorted.len() as f64 * fraction).ceil() as usize).saturating_sub(1);
     sorted[index.min(sorted.len() - 1)]
 }
 
 #[test]
-fn frame_cpu_cost_stays_within_the_budget_at_144hz() {
+fn the_frame_loop_ticks_at_the_rate_144hz_implies_and_records_its_cost() {
     if device_or_skip().is_none() {
         return;
     }
@@ -100,8 +90,8 @@ fn frame_cpu_cost_stays_within_the_budget_at_144hz() {
 
     let delta = Fixed::from_micros(FRAME_DELTA_US);
 
-    // Warm up: the first frames allocate archetype storage, build pipelines, and
-    // populate driver caches. The gate is about the steady state.
+    // The first frames allocate archetype storage, build pipelines, and populate
+    // driver caches. Anything reported is about the steady state.
     for _ in 0..WARMUP_FRAMES {
         frame_loop
             .frame(&mut world, &mut schedule, &camera, delta)
@@ -110,6 +100,7 @@ fn frame_cpu_cost_stays_within_the_budget_at_144hz() {
 
     let mut samples = Vec::with_capacity(MEASURED_FRAMES);
     let mut ticked_frames = 0;
+    let mut extracted_when_tickless = 0;
 
     for _ in 0..MEASURED_FRAMES {
         let started = Instant::now();
@@ -120,36 +111,38 @@ fn frame_cpu_cost_stays_within_the_budget_at_144hz() {
 
         if report.ticks > 0 {
             ticked_frames += 1;
+        } else {
+            extracted_when_tickless = report.extracted;
         }
     }
 
     samples.sort_unstable();
-    let p99 = percentile(&samples, 0.99);
-    let median = percentile(&samples, 0.5);
 
-    // The scenario has to actually be the one the gate describes: a 30 Hz sim at
-    // 144 Hz means roughly one frame in five runs a tick. If every frame ticked,
-    // the clock is wrong and the measurement is of something else.
-    let tick_ratio = ticked_frames as f64 / MEASURED_FRAMES as f64;
-    assert!(
-        (0.10..0.35).contains(&tick_ratio),
-        "expected roughly one frame in five to tick at 30 Hz sim / 144 Hz render, got \
-         {ticked_frames}/{MEASURED_FRAMES}"
-    );
-
+    // Recorded, not asserted. See the module docs: this number is a property of
+    // the GPU as much as of this code, so it belongs in a log next to the device
+    // that produced it rather than inside a threshold.
     println!(
-        "frame_time_p99 (CPU side): p99 {p99:?}, median {median:?}, budget {BUDGET:?}, \
-         {ENTITY_COUNT} entities, {ticked_frames}/{MEASURED_FRAMES} frames ticked, device {}",
+        "frame cost: p99 {:?}, median {:?}, {ENTITY_COUNT} entities at 640x360, \
+         {ticked_frames}/{MEASURED_FRAMES} frames ticked, device {}",
+        percentile(&samples, 0.99),
+        percentile(&samples, 0.5),
         frame_loop.device().info().summary()
     );
 
+    // What *is* hardware-independent: a 30 Hz simulation rendered at 144 Hz runs
+    // a tick roughly one frame in five. If every frame ticked, or none did, the
+    // clock is wrong — and that is a real bug, catchable on any machine.
+    let tick_ratio = f64::from(ticked_frames) / MEASURED_FRAMES as f64;
     assert!(
-        p99 <= BUDGET,
-        "gate frame_time_p99_30hz_sim_144hz_render (CPU clause, bench/baselines.md#m1): \
-         p99 {p99:?} exceeds the {BUDGET:?} budget (median {median:?}).\n\n\
-         This measures only work this project does — running due ticks, extracting, encoding, \
-         and submitting. GPU time is excluded deliberately, since a software rasterizer's \
-         fill rate says nothing about hardware. A regression here is in the sim tick, the \
-         extract, or the per-frame buffer uploads."
+        (0.10..0.35).contains(&tick_ratio),
+        "expected roughly one frame in five to tick at 30 Hz sim / 144 Hz render, got \
+         {ticked_frames}/{MEASURED_FRAMES}. The clock decides this, not the renderer."
+    );
+
+    // A frame that runs no tick must still draw the world, interpolated. That is
+    // the whole reason extract exists, and it holds regardless of hardware.
+    assert_eq!(
+        extracted_when_tickless, ENTITY_COUNT,
+        "a tickless frame must still extract every entity"
     );
 }
