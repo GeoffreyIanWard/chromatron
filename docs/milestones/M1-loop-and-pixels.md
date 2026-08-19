@@ -16,8 +16,8 @@ First frame on screen, and — more importantly — the first proof that the sim
 - ~~`WindowedDriver`~~ **done** — `cx-app`'s windowed driver, with frame pacing, spiral-of-death guard, and pause/step/speed controls (S03).
 - Instanced indirect draw path with a hand-authored palette atlas (the full asset pipeline is M3).
 - GPU frustum culling compute pass.
-- **Debug draw** — lines, spheres, AABBs, OBBs, arrows, crosses: **done**. World-space text lands with the egui overlay, which is where a glyph atlas already exists.
-- egui overlay with tick counter, frame graph, and time controls.
+- **Debug draw** — lines, spheres, AABBs, OBBs, arrows, crosses: **done**. World-space text landed with the egui overlay, as planned.
+- ~~egui overlay~~ **done** — tick counter, frame graph, time controls, and world-space labels.
 - ~~Free-fly camera~~ **done** — `cx-app::flycam`, with the floating origin following it.
 - `tools/graph-viewer`: the isometric architecture viewer over the M0 graph export, with stable layout and `--baseline` diff (S21). Independent of the renderer above — it is a static page, not engine code — but it lands here because M1 is the first milestone with enough modules and systems registered for the diagram to be worth looking at.
 - ~~**Tile layout fixed**~~ **done** — `TILE_CELLS = 64`, 256 tiles per chunk, with `cx_core::TileDirty` as the dirty-tracking bitset. Mesh layout depends on this and M4B cannot retrofit it (`ADR-0011`). Safe to fix now that `ADR-0013` settled terrain representation as a heightfield.
@@ -320,6 +320,65 @@ The end-to-end test caught it because it asserts on the *pixels* rather than on
 the draw call count. A test that checked `debug.lines == 1` would have passed
 against a renderer drawing nothing at all — which is the same failure this
 project keeps finding in its own checks.
+
+## The overlay, and where `egui` is allowed to live
+
+Split across two crates on purpose, and the split is the interesting part:
+
+| Library | Crate | Why |
+|---|---|---|
+| `egui` | `cx-ui` | The UI itself. Contained the way `wgpu` is contained in `cx-render`. |
+| `egui-wgpu` | **`cx-render`** | It names devices, queues, and command encoders. A UI crate handling those while declaring no dependency on `wgpu` would be containment on paper only. |
+
+`tools/ci-checks` enforces both halves. Its ownership table now prefers an
+*exact* match over a family prefix, because `egui-wgpu` matches the `egui`
+family and needs its own answer — and an ownership rule that depends on the
+order of a list is one nobody can read off the list.
+
+`cx-app` never names `egui`. It passes a `UiOutput` from `cx-ui` to `cx-render`
+without opening it.
+
+The time controls also moved: `controls::Action` now lives in `cx-ui`, so the
+overlay's buttons and the keyboard produce the same actions. Two definitions of
+what pause means is how a debug UI stops being trusted.
+
+### Three fatal traps in `egui`'s texture handling, all found by running it
+
+1. **Dropping a `TexturesDelta` unapplied panics from a destructor**, which
+   aborts rather than unwinds.
+2. **Applying every texture and then dropping it is still fatal** — `epaint`
+   tracks *handled* separately from *uploaded*, so the delta has to be cleared.
+3. **Discarding a delta is worse than either.** `egui` sends the font atlas once
+   and everything after that as *partial* updates to it. A frame the window
+   skipped threw its delta away, leaving the renderer without an allocation
+   `egui` believed it had made — and the *next* frame aborted inside `egui-wgpu`
+   with "tried to update a texture that has not been allocated".
+
+So a skipped frame now hands its textures to the renderer and simply does not
+draw. The relevant test asserts on **pixels changing**, not on primitives being
+produced: the overlay produced primitives while drawing nothing in two of the
+three cases above.
+
+**`egui`'s first pass draws nothing.** It lays out text before the font atlas
+exists, so the panel appears on frame two. Invisible at 120 Hz, but it meant the
+first version of the test asserted something false.
+
+## Correction: the occluded back-off shipped broken
+
+`M1`'s previous entry claimed an occluded window backs off to ~60 Hz. **It did
+not.** The decision was unit-tested and correct; the loop then called
+`request_redraw()` unconditionally at the end of every frame, and
+`request_redraw` wakes the event loop immediately, so `ControlFlow::WaitUntil`
+never applied. Measured: **4,300 fps while occluded**, against a 16 ms wait.
+
+It was reported as fixed on the strength of a passing unit test and a live
+observation of the *bug*, without ever observing the *fix* — the window would
+not stay occluded on demand. It has now been seen working: **54 fps occluded,
+120 fps visible**, in the same batch of runs.
+
+The unit test was not wrong; it tested one of the two things that had to be true.
+The missing half — that no frame is requested before the deadline — is now tested
+too.
 
 ## Known inefficiency in the frame path
 

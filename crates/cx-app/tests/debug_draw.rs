@@ -67,7 +67,7 @@ fn a_debug_line_reaches_the_pixels() {
         .line(at(-2.0, 0.0, 0.0), at(2.0, 0.0, 0.0), DebugColour::RED);
 
     let (report, readback) = frame_loop
-        .frame_with_readback(&mut world, &mut schedule, &camera, ONE_TICK)
+        .frame_with_readback(&mut world, &mut schedule, &camera, None, ONE_TICK)
         .expect("the frame should render");
 
     assert_eq!(report.debug.lines, 1);

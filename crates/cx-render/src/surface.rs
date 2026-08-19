@@ -27,6 +27,8 @@ use crate::error::RenderError;
 use crate::frame::{FrameContents, FrameRenderer};
 use crate::instanced::{DrawCall, DrawStats, create_depth_target};
 use crate::offscreen::Rgba;
+use crate::ui::UiStats;
+use cx_ui::UiOutput;
 
 /// Anything that can host a surface.
 ///
@@ -72,11 +74,35 @@ impl SkipReason {
 /// an empty scene legitimately produces and the caller has to tell them apart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Presented {
-    /// The frame was drawn and handed to the compositor, with what the scene
-    /// and the debug overlay each cost.
-    Drawn(DrawStats, DebugStats),
+    /// The frame was drawn and handed to the compositor, with what the scene,
+    /// the debug lines, and the overlay each cost.
+    Drawn(DrawStats, DebugStats, UiStats),
     /// The frame was skipped.
     Skipped(SkipReason),
+}
+
+/// A skipped frame, handing any overlay built for it to the renderer anyway.
+///
+/// Two separate hazards, both fatal, both found by running this:
+///
+/// - Dropping a [`UiOutput`] with an unapplied texture delta aborts the process
+///   from a destructor.
+/// - *Discarding* the delta instead is no better. `egui` sends the font atlas
+///   once and then only partial updates to it, so a thrown-away delta loses the
+///   allocation while `egui` believes it was made — and the next frame panics
+///   inside `egui-wgpu`.
+///
+/// So a skipped frame still uploads its textures. It just does not draw.
+fn skipped(
+    reason: SkipReason,
+    renderer: &mut FrameRenderer,
+    device: &RenderDevice,
+    overlay: Option<UiOutput>,
+) -> Presented {
+    if let Some(overlay) = overlay {
+        renderer.ui_mut().absorb(device, overlay);
+    }
+    Presented::Skipped(reason)
 }
 
 /// A surface size the device will actually accept.
@@ -145,7 +171,7 @@ impl WindowSurface {
     /// would produce a black window with no explanation.
     pub fn new(
         device: &RenderDevice,
-        renderer: &FrameRenderer,
+        renderer: &mut FrameRenderer,
         window: impl WindowTarget,
         width: u32,
         height: u32,
@@ -210,6 +236,10 @@ impl WindowSurface {
             .debug()
             .pipeline_for(device.wgpu_device(), config.format);
 
+        // The overlay renderer is rebuilt rather than given a second pipeline:
+        // egui-wgpu bakes the format in.
+        renderer.rebuild_ui_for(device, config.format);
+
         Ok(Self {
             surface,
             config,
@@ -259,9 +289,10 @@ impl WindowSurface {
     pub fn present(
         &mut self,
         device: &RenderDevice,
-        renderer: &FrameRenderer,
+        renderer: &mut FrameRenderer,
         camera: &Camera,
         contents: FrameContents<'_>,
+        overlay: Option<UiOutput>,
         clear: Rgba,
     ) -> Result<Presented, RenderError> {
         // Only `Validation` is a real failure. Everything else is a normal event
@@ -287,19 +318,19 @@ impl WindowSurface {
             wgpu::CurrentSurfaceTexture::Lost => {
                 tracing::debug!("surface lost, reconfiguring");
                 self.surface.configure(device.wgpu_device(), &self.config);
-                return Ok(Presented::Skipped(SkipReason::Lost));
+                return Ok(skipped(SkipReason::Lost, renderer, device, overlay));
             }
             wgpu::CurrentSurfaceTexture::Outdated => {
                 tracing::debug!("surface outdated, reconfiguring");
                 self.surface.configure(device.wgpu_device(), &self.config);
-                return Ok(Presented::Skipped(SkipReason::Outdated));
+                return Ok(skipped(SkipReason::Outdated, renderer, device, overlay));
             }
             wgpu::CurrentSurfaceTexture::Occluded => {
-                return Ok(Presented::Skipped(SkipReason::Occluded));
+                return Ok(skipped(SkipReason::Occluded, renderer, device, overlay));
             }
             wgpu::CurrentSurfaceTexture::Timeout => {
                 tracing::debug!("acquiring the next frame timed out, skipping");
-                return Ok(Presented::Skipped(SkipReason::Timeout));
+                return Ok(skipped(SkipReason::Timeout, renderer, device, overlay));
             }
 
             wgpu::CurrentSurfaceTexture::Validation => {
@@ -357,13 +388,25 @@ impl WindowSurface {
             },
         );
 
+        // The overlay last: it is a 2D layer over a finished picture.
+        let ui_stats = match overlay {
+            Some(output) => renderer.ui_mut().encode(
+                device,
+                &mut encoder,
+                &view,
+                [self.config.width, self.config.height],
+                output,
+            ),
+            None => UiStats::default(),
+        };
+
         let queue = device.wgpu_queue();
         queue.submit(std::iter::once(encoder.finish()));
         // In wgpu 30 presentation is a queue operation rather than a method on
         // the frame.
         queue.present(frame);
 
-        Ok(Presented::Drawn(stats, debug_stats))
+        Ok(Presented::Drawn(stats, debug_stats, ui_stats))
     }
 }
 
@@ -445,7 +488,7 @@ mod tests {
         );
         let debug_vertices = debug.rebase(ChunkCoord::new(0, 0)).to_vec();
 
-        let (bgra, stats, debug_stats) = renderer
+        let (bgra, stats, debug_stats, _) = renderer
             .render_to_format(
                 &device,
                 OffscreenTarget {
@@ -459,13 +502,16 @@ mod tests {
                     debug: &debug_vertices,
                 },
                 clear,
-                Some(&debug_renderer),
+                crate::instanced::OffscreenExtras {
+                    debug: Some(&debug_renderer),
+                    overlay: None,
+                },
             )
             .expect("drawing to a surface-format target should work");
         assert_eq!(stats.draw_calls, 1);
         assert_eq!(debug_stats.lines, 12, "an AABB is twelve lines");
 
-        let (rgba, _, _) = renderer
+        let (rgba, _, _, _) = renderer
             .render_to_format(
                 &device,
                 OffscreenTarget {
@@ -479,7 +525,10 @@ mod tests {
                     debug: &debug_vertices,
                 },
                 clear,
-                Some(&debug_renderer),
+                crate::instanced::OffscreenExtras {
+                    debug: Some(&debug_renderer),
+                    overlay: None,
+                },
             )
             .expect("drawing to the offscreen format should work");
 

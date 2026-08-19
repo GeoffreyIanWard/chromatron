@@ -22,6 +22,7 @@ use crate::error::RenderError;
 use crate::instanced::{DrawStats, InstancedRenderer, OffscreenTarget};
 use crate::mesh::MeshData;
 use crate::offscreen::{Readback, Rgba};
+use crate::ui::{UiRenderer, UiStats};
 use cx_view::ExtractedInstance;
 
 /// What one frame draws.
@@ -42,6 +43,7 @@ pub struct FrameContents<'a> {
 pub struct FrameRenderer {
     instanced: InstancedRenderer,
     debug: DebugRenderer,
+    ui: UiRenderer,
 }
 
 impl FrameRenderer {
@@ -50,19 +52,26 @@ impl FrameRenderer {
         Ok(Self {
             instanced: InstancedRenderer::new(device, mesh)?,
             debug: DebugRenderer::new(device),
+            ui: UiRenderer::new(device),
         })
     }
 
     /// Draws a frame to an offscreen target and reads the pixels back.
+    ///
+    /// Takes the overlay too, so the windowed path's *only* untested part is
+    /// the swapchain itself: everything from tessellation to pixels is
+    /// exercisable on a machine with no display.
     pub fn render_offscreen(
-        &self,
+        &mut self,
         device: &RenderDevice,
-        width: u32,
-        height: u32,
+        size: [u32; 2],
         camera: &Camera,
         contents: FrameContents<'_>,
+        overlay: Option<cx_ui::UiOutput>,
         clear: Rgba,
-    ) -> Result<(Readback, DrawStats, DebugStats), RenderError> {
+    ) -> Result<(Readback, DrawStats, DebugStats, UiStats), RenderError> {
+        let [width, height] = size;
+
         self.instanced.render_to_format(
             device,
             OffscreenTarget {
@@ -73,7 +82,10 @@ impl FrameRenderer {
             camera,
             contents,
             clear,
-            Some(&self.debug),
+            crate::instanced::OffscreenExtras {
+                debug: Some(&self.debug),
+                overlay: overlay.map(|overlay| (&mut self.ui, overlay)),
+            },
         )
     }
 
@@ -85,5 +97,19 @@ impl FrameRenderer {
     /// The debug-line renderer.
     pub(crate) const fn debug(&self) -> &DebugRenderer {
         &self.debug
+    }
+
+    /// Replaces the overlay renderer with one built for `format`.
+    ///
+    /// `egui-wgpu` bakes the colour format into the whole renderer rather than
+    /// into a swappable pipeline, so a surface whose format differs from the
+    /// offscreen one needs the renderer rebuilt rather than a second pipeline.
+    pub(crate) fn rebuild_ui_for(&mut self, device: &RenderDevice, format: wgpu::TextureFormat) {
+        self.ui = UiRenderer::for_format(device, format);
+    }
+
+    /// The overlay renderer.
+    pub(crate) const fn ui_mut(&mut self) -> &mut UiRenderer {
+        &mut self.ui
     }
 }

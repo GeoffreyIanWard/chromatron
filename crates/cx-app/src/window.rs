@@ -36,10 +36,10 @@ use cx_ecs::{SimSchedule, SimWorld};
 use cx_render::WindowSurface;
 use cx_time::TickRate;
 
-use crate::controls::{Action, Response, respond};
 use crate::error::AppError;
 use crate::flycam::{FlyCamera, LookIntent, MoveIntent};
 use crate::frame::{FrameLoop, FrameReport};
+use cx_ui::{Action, Overlay, OverlayState, Response, UiInput, respond};
 
 /// How the window should open.
 #[derive(Debug, Clone)]
@@ -180,7 +180,10 @@ const fn axis_value(positive: bool, negative: bool) -> f32 {
     }
 }
 
-/// How the loop should wait before the next frame.
+/// When the next frame should be drawn.
+///
+/// `None` means "as soon as possible". A deadline means the loop is backing off
+/// because nothing is being shown.
 ///
 /// The one other place a wall-clock read is legitimate, for the same reason as
 /// [`WindowedApp::elapsed`]: it schedules a wake-up and never reaches the
@@ -190,12 +193,28 @@ const fn axis_value(positive: bool, negative: bool) -> f32 {
     reason = "scheduling the next wake-up needs the current instant; nothing here enters the \
               simulation, and ADR-0004's rule is about sim logic"
 )]
-fn pacing_for(report: &FrameReport) -> ControlFlow {
+fn next_frame_at(report: &FrameReport) -> Option<Instant> {
     match report.skipped {
-        Some(reason) if reason.is_persistent() => {
-            ControlFlow::WaitUntil(Instant::now() + IDLE_RETRY)
-        }
-        _ => ControlFlow::Poll,
+        Some(reason) if reason.is_persistent() => Some(Instant::now() + IDLE_RETRY),
+        _ => None,
+    }
+}
+
+/// Whether the deadline has arrived.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "same wall-clock exemption as `next_frame_at`; this only decides when to ask for \
+              the next frame"
+)]
+fn deadline_reached(deadline: Option<Instant>) -> bool {
+    deadline.is_none_or(|at| Instant::now() >= at)
+}
+
+/// How the event loop should wait, given when the next frame is due.
+fn pacing_for(deadline: Option<Instant>) -> ControlFlow {
+    match deadline {
+        Some(at) => ControlFlow::WaitUntil(at),
+        None => ControlFlow::Poll,
     }
 }
 
@@ -256,8 +275,15 @@ where
         failure: None,
         since_report: None,
         frames_since_report: 0,
+        last_report: FrameReport::default(),
+        quit_requested: false,
         skipped_since_report: 0,
         held: Held::default(),
+        overlay: Overlay::new(),
+        ui_wants_pointer: false,
+        next_frame_at: None,
+        pointer: None,
+        pointer_down: false,
         looking: false,
     };
 
@@ -303,7 +329,22 @@ struct WindowedApp<F> {
     since_report: Option<Instant>,
     frames_since_report: u32,
     skipped_since_report: u32,
+    /// The previous frame's report, which is what the overlay displays.
+    last_report: FrameReport,
+    /// Set when the overlay's quit button is pressed, since a callback cannot
+    /// reach the event loop.
+    quit_requested: bool,
     held: Held,
+    overlay: Overlay,
+    /// Where the pointer is, in logical pixels, when it is over the window.
+    pointer: Option<[f32; 2]>,
+    /// Whether the primary pointer button is down.
+    pointer_down: bool,
+    /// When the next frame is due, when the loop is backing off.
+    next_frame_at: Option<Instant>,
+    /// Whether the overlay is under the pointer, in which case pointer input
+    /// belongs to it rather than to the camera.
+    ui_wants_pointer: bool,
     /// Whether the look button is down. Mouse movement only turns the camera
     /// while it is, so the cursor stays usable for everything else.
     looking: bool,
@@ -392,6 +433,7 @@ impl<F: FnMut(&mut FrameLoop)> WindowedApp<F> {
             // each would be the only thing in the log.
             skipped = self.skipped_since_report,
             debug_lines = report.debug.lines,
+            ui_primitives = report.ui.primitives,
             control = ?self.frame_loop.control(),
             // The camera, so flying is verifiable from a log rather than only
             // by looking at the screen.
@@ -413,6 +455,20 @@ impl<F: FnMut(&mut FrameLoop)> WindowedApp<F> {
         // Before anything else, so the client's debug geometry is queued in time
         // to be rebased and drawn with this frame rather than the next one.
         (self.before_frame)(&mut self.frame_loop);
+
+        let (overlay, actions) = self.build_overlay(delta);
+
+        // Remembered before the overlay is handed to the renderer: while the
+        // pointer is over a panel, dragging must not also turn the camera.
+        self.ui_wants_pointer = overlay.wants_pointer;
+
+        // The overlay's buttons and the keyboard produce the same actions, so
+        // there is nothing to translate.
+        for action in actions {
+            if self.handle(action) {
+                self.quit_requested = true;
+            }
+        }
 
         // The camera moves in real seconds, not ticks: it is view state, below
         // the firewall, and pinning it to 30 Hz would make it stutter on a
@@ -437,10 +493,64 @@ impl<F: FnMut(&mut FrameLoop)> WindowedApp<F> {
             &mut self.schedule,
             &mut active.surface,
             &camera,
+            Some(overlay),
             delta,
         )?;
 
         Ok(report)
+    }
+
+    /// Builds the overlay for this frame.
+    ///
+    /// Reads the *previous* frame's report, because this runs before the current
+    /// one exists. At 120 Hz that is 8 ms of lag on a number nobody reads that
+    /// precisely, and the alternative is running the UI after the draw and
+    /// showing it a frame late anyway.
+    fn build_overlay(&mut self, delta: Fixed) -> (cx_ui::UiOutput, Vec<Action>) {
+        self.overlay.record_frame(delta.as_secs_f32() * 1_000.0);
+
+        let (size, scale) = match self.active.as_ref() {
+            Some(active) => {
+                let size = active.window.inner_size();
+                let scale = active.window.scale_factor() as f32;
+                (
+                    [size.width as f32 / scale, size.height as f32 / scale],
+                    scale,
+                )
+            }
+            None => ([1.0, 1.0], 1.0),
+        };
+
+        let state = OverlayState {
+            tick: self.frame_loop.tick().0,
+            alpha: self.last_report.alpha,
+            control: self.frame_loop.control(),
+            instances: self.last_report.extracted,
+            draw_calls: self.last_report.draw.map_or(0, |stats| stats.draw_calls),
+            debug_lines: self.last_report.debug.lines,
+            skipped: self.skipped_since_report,
+            fell_behind: self.last_report.fell_behind,
+            device: self.frame_loop.device().info().summary(),
+            camera: format!(
+                "camera {:?} {:.1}, {:.1}, {:.1}",
+                self.camera.origin(),
+                self.camera.position.local.x,
+                self.camera.position.local.y,
+                self.camera.position.local.z
+            ),
+            labels: Vec::new(),
+        };
+
+        self.overlay.run(
+            UiInput {
+                size,
+                scale,
+                pointer: self.pointer,
+                pointer_down: self.pointer_down,
+                delta_seconds: delta.as_secs_f32(),
+            },
+            &state,
+        )
     }
 
     /// Applies a key press.
@@ -527,12 +637,26 @@ impl<F: FnMut(&mut FrameLoop)> ApplicationHandler for WindowedApp<F> {
                 }
             }
 
-            WindowEvent::MouseInput {
-                state,
-                button: MouseButton::Right,
-                ..
-            } => {
-                self.looking = state == ElementState::Pressed;
+            WindowEvent::MouseInput { state, button, .. } => {
+                let pressed = state == ElementState::Pressed;
+                match button {
+                    MouseButton::Right => self.looking = pressed,
+                    MouseButton::Left => self.pointer_down = pressed,
+                    _ => {}
+                }
+            }
+
+            WindowEvent::CursorMoved { position, .. } => {
+                let scale = self
+                    .active
+                    .as_ref()
+                    .map_or(1.0, |active| active.window.scale_factor());
+                self.pointer = Some([(position.x / scale) as f32, (position.y / scale) as f32]);
+            }
+
+            WindowEvent::CursorLeft { .. } => {
+                self.pointer = None;
+                self.pointer_down = false;
             }
 
             // Losing focus releases everything. Key-up is delivered to whoever
@@ -541,27 +665,34 @@ impl<F: FnMut(&mut FrameLoop)> ApplicationHandler for WindowedApp<F> {
             WindowEvent::Focused(false) => {
                 self.held = Held::default();
                 self.looking = false;
+                self.pointer_down = false;
             }
 
             WindowEvent::RedrawRequested => {
                 match self.draw() {
                     Ok(report) => {
+                        self.last_report = report;
+
+                        if self.quit_requested {
+                            event_loop.exit();
+                        }
+
                         // Back off when nothing is being shown, rather than
                         // spinning. `Poll` is right while frames are landing and
                         // wrong the moment they stop.
-                        event_loop.set_control_flow(pacing_for(&report));
+                        self.next_frame_at = next_frame_at(&report);
+                        event_loop.set_control_flow(pacing_for(self.next_frame_at));
 
                         self.report_progress(&report);
                     }
                     Err(error) => self.fail(event_loop, error),
                 }
 
-                // Ask for the next frame from here rather than from
-                // `about_to_wait`: on the platforms that coalesce redraws, this
-                // is the point at which the previous one is genuinely finished.
-                if let Some(active) = self.active.as_ref() {
-                    active.window.request_redraw();
-                }
+                // The next frame is requested from `about_to_wait`, not here.
+                // Requesting it here happens *before* the control flow set above
+                // takes effect, so the window redraws immediately and the
+                // back-off never applies — which is exactly what an occluded
+                // window did: 4,230 frames a second against a 16 ms wait.
             }
 
             _ => {}
@@ -578,6 +709,7 @@ impl<F: FnMut(&mut FrameLoop)> ApplicationHandler for WindowedApp<F> {
         // the edges of the screen.
         if let DeviceEvent::MouseMotion { delta } = event
             && self.looking
+            && !self.ui_wants_pointer
         {
             let (dx, dy) = delta;
             self.camera.look(LookIntent {
@@ -586,6 +718,20 @@ impl<F: FnMut(&mut FrameLoop)> ApplicationHandler for WindowedApp<F> {
                 yaw: -dx as f32 * LOOK_SENSITIVITY,
                 pitch: -dy as f32 * LOOK_SENSITIVITY,
             });
+        }
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        // `request_redraw` wakes the loop immediately, so calling it
+        // unconditionally defeats `WaitUntil` entirely — an occluded window ran
+        // at 4,300 frames a second against a 16 ms wait until this check
+        // existed. Ask only once the deadline has actually arrived.
+        if !deadline_reached(self.next_frame_at) {
+            return;
+        }
+
+        if let Some(active) = self.active.as_ref() {
+            active.window.request_redraw();
         }
     }
 
@@ -702,12 +848,8 @@ mod tests {
     fn report_with(skipped: Option<cx_render::SkipReason>) -> FrameReport {
         FrameReport {
             ticks: 1,
-            alpha: 0.0,
-            extracted: 0,
-            draw: None,
-            debug: cx_render::DebugStats::default(),
             skipped,
-            fell_behind: false,
+            ..FrameReport::default()
         }
     }
 
@@ -716,10 +858,40 @@ mod tests {
     /// measured, before this existed.
     #[test]
     fn an_occluded_window_makes_the_loop_wait() {
-        let paced = pacing_for(&report_with(Some(cx_render::SkipReason::Occluded)));
+        let deadline = next_frame_at(&report_with(Some(cx_render::SkipReason::Occluded)));
         assert!(
-            matches!(paced, ControlFlow::WaitUntil(_)),
-            "an occluded frame should schedule a wake-up, got {paced:?}"
+            deadline.is_some(),
+            "an occluded frame should set a deadline"
+        );
+        assert!(
+            matches!(pacing_for(deadline), ControlFlow::WaitUntil(_)),
+            "and the loop should wait for it"
+        );
+        assert!(
+            !deadline_reached(deadline),
+            "the deadline is in the future, so no frame should be asked for yet"
+        );
+    }
+
+    /// The half that was missing: a deadline is worthless if the loop asks for a
+    /// redraw anyway, because `request_redraw` wakes the loop immediately.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "constructing a deadline to test against needs a reference instant"
+    )]
+    #[test]
+    fn no_frame_is_requested_before_the_deadline() {
+        assert!(
+            deadline_reached(None),
+            "with no deadline, every wake-up should ask for a frame"
+        );
+        assert!(
+            !deadline_reached(Some(Instant::now() + Duration::from_secs(60))),
+            "a future deadline must suppress the request"
+        );
+        assert!(
+            deadline_reached(Some(Instant::now() - Duration::from_secs(1))),
+            "a past deadline must let it through"
         );
     }
 
@@ -734,8 +906,8 @@ mod tests {
             cx_render::SkipReason::Timeout,
         ] {
             assert_eq!(
-                pacing_for(&report_with(Some(reason))),
-                ControlFlow::Poll,
+                next_frame_at(&report_with(Some(reason))),
+                None,
                 "{reason:?} should retry at once"
             );
             assert!(!reason.is_persistent());
@@ -745,6 +917,7 @@ mod tests {
 
     #[test]
     fn a_drawn_frame_keeps_polling() {
-        assert_eq!(pacing_for(&report_with(None)), ControlFlow::Poll);
+        assert_eq!(next_frame_at(&report_with(None)), None);
+        assert_eq!(pacing_for(None), ControlFlow::Poll);
     }
 }

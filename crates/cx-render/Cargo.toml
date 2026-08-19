@@ -10,6 +10,12 @@ publish.workspace = true
 [dependencies]
 cx-core.workspace = true
 cx-view.workspace = true
+cx-ui.workspace = true
+
+# The egui-to-wgpu bridge. It names devices, queues, and encoders, so it lives
+# with the crate that owns wgpu rather than with the one that owns egui — see
+# 02-architecture.md and tools/ci-checks.
+egui-wgpu.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 wgpu.workspace = true

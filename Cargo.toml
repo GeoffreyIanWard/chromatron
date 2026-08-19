@@ -72,6 +72,12 @@ bytemuck = { version = "=1.25.2", features = ["derive"] }
 raw-window-handle = "=0.6.2"
 winit = "=0.30.13"
 
+# The debug overlay (S14/S16). Split across two crates on purpose: `egui` is the
+# UI itself and lives in cx-ui, `egui-wgpu` names wgpu types and therefore lives
+# with cx-render. tools/ci-checks enforces both.
+egui = "=0.36.1"
+egui-wgpu = "=0.36.1"
+
 # Internal.
 cx-core = { path = "crates/cx-core" }
 cx-module = { path = "crates/cx-module" }

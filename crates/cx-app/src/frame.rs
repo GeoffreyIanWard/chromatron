@@ -26,9 +26,10 @@ use cx_core::math::ChunkCoord;
 use cx_ecs::{SimSchedule, SimWorld};
 use cx_render::{
     Camera, DebugStats, DrawStats, FrameContents, FrameRenderer, MeshData, Presented, RenderDevice,
-    RenderError, SkipReason, WindowSurface,
+    RenderError, SkipReason, UiStats, WindowSurface,
 };
 use cx_time::{CatchUp, PacedDriver, TickRate, TimeControl};
+use cx_ui::UiOutput;
 use cx_view::{DebugDraw, ViewWorld, extract};
 
 /// What one frame did.
@@ -36,7 +37,7 @@ use cx_view::{DebugDraw, ViewWorld, extract};
 /// Everything here is a number a test can assert on, which is the point: a
 /// frame loop whose behaviour can only be judged by looking at it is a frame
 /// loop that gets debugged by looking at it.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct FrameReport {
     /// Ticks the simulation advanced this frame. Often zero at a high frame rate.
     pub ticks: u64,
@@ -46,8 +47,10 @@ pub struct FrameReport {
     pub extracted: usize,
     /// What the draw cost, when the frame drew.
     pub draw: Option<DrawStats>,
-    /// What the debug overlay cost, when the frame drew.
+    /// What the debug lines cost, when the frame drew.
     pub debug: DebugStats,
+    /// What the overlay cost, when the frame drew.
+    pub ui: UiStats,
     /// Why the frame was not drawn, when it was not.
     ///
     /// Distinct from `draw: None`, which also means "this was a headless frame
@@ -194,13 +197,15 @@ impl FrameLoop {
         world: &mut SimWorld,
         schedule: &mut SimSchedule,
         camera: &Camera,
+        overlay: Option<UiOutput>,
         real_delta: Fixed,
     ) -> Result<(FrameReport, cx_render::Readback), RenderError> {
         let produced = self.advance(world, schedule, real_delta);
 
-        let (readback, stats, debug) = self.render_offscreen(camera)?;
+        let (readback, stats, debug, ui) = self.render_offscreen(camera, overlay)?;
         let mut report = self.report(produced, Some(stats));
         report.debug = debug;
+        report.ui = ui;
         self.debug.clear();
 
         Ok((report, readback))
@@ -232,6 +237,7 @@ impl FrameLoop {
         schedule: &mut SimSchedule,
         surface: &mut WindowSurface,
         camera: &Camera,
+        overlay: Option<UiOutput>,
         real_delta: Fixed,
     ) -> Result<FrameReport, RenderError> {
         let produced = self.advance(world, schedule, real_delta);
@@ -239,20 +245,22 @@ impl FrameLoop {
 
         let presented = surface.present(
             &self.device,
-            &self.renderer,
+            &mut self.renderer,
             camera,
             FrameContents {
                 instances: self.view.instances(),
                 debug: debug_vertices,
             },
+            overlay,
             CLEAR_COLOUR,
         )?;
 
         let mut report = self.report(produced, None);
         match presented {
-            Presented::Drawn(stats, debug) => {
+            Presented::Drawn(stats, debug, ui) => {
                 report.draw = Some(stats);
                 report.debug = debug;
+                report.ui = ui;
             }
             Presented::Skipped(reason) => report.skipped = Some(reason),
         }
@@ -270,12 +278,12 @@ impl FrameLoop {
     /// Lives here because the device does: the surface and the device that draws
     /// into it have to come from the same adapter.
     pub fn surface_for(
-        &self,
+        &mut self,
         window: impl cx_render::WindowTarget,
         width: u32,
         height: u32,
     ) -> Result<WindowSurface, RenderError> {
-        WindowSurface::new(&self.device, &self.renderer, window, width, height)
+        WindowSurface::new(&self.device, &mut self.renderer, window, width, height)
     }
 
     /// Reconfigures a surface this loop created.
@@ -304,7 +312,7 @@ impl FrameLoop {
     }
 
     fn draw(&mut self, camera: &Camera) -> Result<(DrawStats, DebugStats), RenderError> {
-        let (_, stats, debug) = self.render_offscreen(camera)?;
+        let (_, stats, debug, _) = self.render_offscreen(camera, None)?;
         self.debug.clear();
         Ok((stats, debug))
     }
@@ -313,18 +321,19 @@ impl FrameLoop {
     fn render_offscreen(
         &mut self,
         camera: &Camera,
-    ) -> Result<(cx_render::Readback, DrawStats, DebugStats), RenderError> {
+        overlay: Option<UiOutput>,
+    ) -> Result<(cx_render::Readback, DrawStats, DebugStats, UiStats), RenderError> {
         let debug_vertices = self.debug.rebase(self.origin);
 
         self.renderer.render_offscreen(
             &self.device,
-            self.width,
-            self.height,
+            [self.width, self.height],
             camera,
             FrameContents {
                 instances: self.view.instances(),
                 debug: debug_vertices,
             },
+            overlay,
             CLEAR_COLOUR,
         )
     }
@@ -336,6 +345,7 @@ impl FrameLoop {
             extracted: self.view.len(),
             draw,
             debug: DebugStats::default(),
+            ui: UiStats::default(),
             skipped: None,
             fell_behind: produced.fell_behind,
         }
@@ -512,6 +522,7 @@ mod tests {
                 &mut world,
                 &mut schedule,
                 &camera,
+                None,
                 Fixed::from_micros(33_333),
             )
             .expect("the frame should render");
