@@ -60,6 +60,12 @@ self-hosted runner would let anyone opening a pull request execute code on that 
 That is a security tradeoff, not a cost tradeoff, and it is not worth making for a frame-rate
 number that can be recorded by hand.
 
+**Every CI runner turned out to have an adapter.** With `CX_REQUIRE_GPU=1` set — which makes
+a missing adapter a failure rather than a skip — Ubuntu, macOS, and Windows all pass. So the
+renderer's correctness tests genuinely execute on all three platforms, not just the one where
+lavapipe is installed deliberately. That was an open empirical question, and the answer means
+the requirement does not need narrowing to a subset.
+
 **Skipping is no longer silent.** Renderer tests skip when no adapter exists, so a bare
 container stays usable — but cargo swallows a passing test's output, which meant a green CI
 run was indistinguishable from one that rendered nothing. CI now sets `CX_REQUIRE_GPU=1`,
