@@ -278,14 +278,42 @@ const EXTERNAL_OWNERS: &[(&str, &str)] = &[
     ("cpal", "cx-audio"),
     ("egui", "cx-ui"),
     ("eframe", "cx-ui"),
+    // The exception, and the reason `owner_of` prefers exact matches over
+    // family prefixes: `egui-wgpu` is the bridge *between* the two libraries.
+    // It names `wgpu` types, so it belongs with the crate that owns `wgpu` —
+    // putting it in `cx-ui` would mean the UI crate handling render devices,
+    // queues, and command encoders while declaring no dependency on `wgpu` at
+    // all, which is containment on paper only.
+    ("egui-wgpu", "cx-render"),
 ];
 
 /// The crate permitted to declare `name`, if it is a contained dependency.
+///
+/// An exact match beats a family prefix. Both `egui` and `egui-wgpu` are listed,
+/// and `egui-wgpu` would otherwise resolve to whichever entry happened to come
+/// first in the table — an ownership rule that depends on the order of a list is
+/// one nobody can read off the list.
 fn owner_of(name: &str) -> Option<&'static str> {
+    if let Some((_, owner)) = EXTERNAL_OWNERS.iter().find(|(family, _)| name == *family) {
+        return Some(owner);
+    }
+
     EXTERNAL_OWNERS
         .iter()
-        .find(|(family, _)| name == *family || name.starts_with(&format!("{family}-")))
+        .find(|(family, _)| name.starts_with(&format!("{family}-")))
         .map(|(_, owner)| *owner)
+}
+
+#[test]
+fn an_exact_owner_beats_a_family_prefix() {
+    // `egui-wgpu` matches the `egui` family *and* has its own entry. The
+    // specific one has to win, whichever order the table is written in.
+    assert_eq!(owner_of("egui-wgpu"), Some("cx-render"));
+    assert_eq!(owner_of("egui"), Some("cx-ui"));
+    assert_eq!(owner_of("egui-winit"), Some("cx-ui"));
+    assert_eq!(owner_of("wgpu"), Some("cx-render"));
+    assert_eq!(owner_of("wgpu-core"), Some("cx-render"));
+    assert_eq!(owner_of("glam"), None);
 }
 
 /// Each contained external dependency may be declared only by its owning crate.

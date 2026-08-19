@@ -169,6 +169,18 @@ impl std::fmt::Debug for InstancedRenderer {
     }
 }
 
+/// The passes that draw *over* the scene, when a caller wants them.
+///
+/// Grouped because they are both optional and both come last; as loose
+/// parameters they were the seventh and eighth argument of a function that had
+/// already been split once for the same reason.
+pub(crate) struct OffscreenExtras<'a> {
+    /// The debug-line renderer, when there are lines to draw.
+    pub debug: Option<&'a DebugRenderer>,
+    /// The overlay renderer and this frame's output.
+    pub overlay: Option<(&'a mut crate::ui::UiRenderer, cx_ui::UiOutput)>,
+}
+
 /// An offscreen target to draw into.
 pub(crate) struct OffscreenTarget {
     /// Target width in pixels.
@@ -457,7 +469,7 @@ impl InstancedRenderer {
         instances: &[ExtractedInstance],
         clear: Rgba,
     ) -> Result<(Readback, DrawStats), RenderError> {
-        let (readback, stats, _) = self.render_to_format(
+        let (readback, stats, _, _) = self.render_to_format(
             render_device,
             OffscreenTarget {
                 width,
@@ -470,7 +482,10 @@ impl InstancedRenderer {
                 debug: &[],
             },
             clear,
-            None,
+            OffscreenExtras {
+                debug: None,
+                overlay: None,
+            },
         )?;
         Ok((readback, stats))
     }
@@ -490,8 +505,10 @@ impl InstancedRenderer {
         camera: &Camera,
         contents: FrameContents<'_>,
         clear: Rgba,
-        debug: Option<&DebugRenderer>,
-    ) -> Result<(Readback, DrawStats, DebugStats), RenderError> {
+        extras: OffscreenExtras<'_>,
+    ) -> Result<(Readback, DrawStats, DebugStats, crate::ui::UiStats), RenderError> {
+        let OffscreenExtras { debug, overlay } = extras;
+
         let OffscreenTarget {
             width,
             height,
@@ -569,6 +586,18 @@ impl InstancedRenderer {
             None => DebugStats::default(),
         };
 
+        // The overlay last, over a finished picture.
+        let ui_stats = match overlay {
+            Some((renderer, output)) => renderer.encode(
+                render_device,
+                &mut encoder,
+                &colour_view,
+                [width, height],
+                output,
+            ),
+            None => crate::ui::UiStats::default(),
+        };
+
         let readback = crate::offscreen::copy_texture_to_readback(
             device,
             queue,
@@ -578,7 +607,7 @@ impl InstancedRenderer {
             height,
         )?;
 
-        Ok((readback, stats, debug_stats))
+        Ok((readback, stats, debug_stats, ui_stats))
     }
 }
 

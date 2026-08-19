@@ -7,6 +7,13 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+cx-core.workspace = true
+cx-time.workspace = true
+
+# The debug overlay. `02-architecture.md` gives egui exactly one home, the way
+# wgpu lives only in cx-render; tools/ci-checks enforces it. The wgpu-facing
+# half (`egui-wgpu`) deliberately lives with the renderer instead.
+egui.workspace = true
 
 # Below the firewall: the strict sim lint set does not apply here.
 # See the workspace manifest and 03-conventions.md.

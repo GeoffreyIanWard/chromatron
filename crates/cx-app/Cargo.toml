@@ -12,6 +12,7 @@ cx-ecs.workspace = true
 cx-time.workspace = true
 cx-render.workspace = true
 cx-view.workspace = true
+cx-ui.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 

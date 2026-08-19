@@ -35,6 +35,7 @@ pub mod mesh;
 pub mod offscreen;
 pub mod surface;
 pub mod testing;
+pub mod ui;
 
 pub use camera::Camera;
 pub use debug::{DebugRenderer, DebugStats};
@@ -45,3 +46,4 @@ pub use instanced::{DrawStats, InstancedRenderer};
 pub use mesh::{MeshData, Vertex};
 pub use offscreen::{Readback, Rgba};
 pub use surface::{Presented, SkipReason, WindowSurface, WindowTarget};
+pub use ui::{UiRenderer, UiStats};

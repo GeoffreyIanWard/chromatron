@@ -2,7 +2,9 @@
 //!
 //! S03 asks for pause, single-step, and speed. What those keys *do* is pure
 //! state transition on a [`TimeControl`], so it lives here and is unit-tested,
-//! and [`crate::window`] is left with nothing but "this key means that action".
+//! and the key table in `cx-app::window` is left with nothing but "this key means
+//! that action". The overlay's buttons emit the same [`Action`]s, so there is one
+//! definition of what pausing does rather than one per input device.
 //!
 //! The split matters more than it looks: "space pauses" is trivially correct and
 //! trivially checked, whereas "stepping while already stepping" and "speeding up
@@ -33,8 +35,13 @@ pub enum Action {
 }
 
 /// What the loop should do about an [`Action`].
+///
+/// Deliberately *not* `#[non_exhaustive]`, unlike [`Action`]. Actions are an
+/// open taxonomy of things a player might ask for and will grow; responses are
+/// the two things the loop can do about one. Marking this open would force every
+/// caller in every other crate to write a catch-all arm, which is exactly how a
+/// third response would get silently ignored if one were ever added.
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[non_exhaustive]
 pub enum Response {
     /// Adopt this control state.
     Time(TimeControl),
