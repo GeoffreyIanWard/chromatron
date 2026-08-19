@@ -35,13 +35,47 @@ pub trait WindowTarget: HasWindowHandle + HasDisplayHandle + Send + Sync + 'stat
 
 impl<T> WindowTarget for T where T: HasWindowHandle + HasDisplayHandle + Send + Sync + 'static {}
 
-/// What a frame that could not be acquired reports.
+/// Why a frame was not drawn.
 ///
-/// Zero draw calls, which is exactly true: nothing was drawn.
-const SKIPPED_FRAME: DrawStats = DrawStats {
-    draw_calls: 0,
-    instances: 0,
-};
+/// Every one of these is normal in the life of a window rather than an error,
+/// which is exactly why they need naming: dropping one frame is invisible where
+/// ending the run is not, so without a reason attached a skipped frame is
+/// indistinguishable from a frame that drew nothing because the scene was empty.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SkipReason {
+    /// Nothing is visible — the window is behind another, or off-screen.
+    Occluded,
+    /// The surface became invalid and was reconfigured.
+    Lost,
+    /// The surface no longer matches the window and was reconfigured.
+    Outdated,
+    /// The compositor did not hand over a frame in time.
+    Timeout,
+}
+
+impl SkipReason {
+    /// Whether this is expected to persist rather than clear on the next frame.
+    ///
+    /// An occluded window stays occluded until someone moves it, so a loop that
+    /// keeps asking at full speed burns a core to draw nothing. The others are
+    /// transient and worth retrying immediately.
+    pub const fn is_persistent(self) -> bool {
+        matches!(self, SkipReason::Occluded)
+    }
+}
+
+/// What presenting a frame did.
+///
+/// An enum rather than `DrawStats { draw_calls: 0 }`, because that is also what
+/// an empty scene legitimately produces and the caller has to tell them apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Presented {
+    /// The frame was drawn and handed to the compositor.
+    Drawn(DrawStats),
+    /// The frame was skipped.
+    Skipped(SkipReason),
+}
 
 /// A surface size the device will actually accept.
 ///
@@ -219,7 +253,7 @@ impl WindowSurface {
         camera: &Camera,
         instances: &[ExtractedInstance],
         clear: Rgba,
-    ) -> Result<DrawStats, RenderError> {
+    ) -> Result<Presented, RenderError> {
         // Only `Validation` is a real failure. Everything else is a normal event
         // in the life of a window — resized, minimised, display changed — and
         // dropping one frame is invisible where ending the run is not.
@@ -235,12 +269,27 @@ impl WindowSurface {
 
             // Lost or Outdated: reconfigure and skip. Occluded or Timeout: skip;
             // there is nothing to fix and nobody is looking at the window.
-            wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
+            //
+            // Each says *why* rather than returning a bare skip. A frame that
+            // silently draws nothing looks identical to a frame that drew
+            // nothing because the scene was empty, and telling those apart with
+            // no log means guessing.
+            wgpu::CurrentSurfaceTexture::Lost => {
+                tracing::debug!("surface lost, reconfiguring");
                 self.surface.configure(device.wgpu_device(), &self.config);
-                return Ok(SKIPPED_FRAME);
+                return Ok(Presented::Skipped(SkipReason::Lost));
             }
-            wgpu::CurrentSurfaceTexture::Occluded | wgpu::CurrentSurfaceTexture::Timeout => {
-                return Ok(SKIPPED_FRAME);
+            wgpu::CurrentSurfaceTexture::Outdated => {
+                tracing::debug!("surface outdated, reconfiguring");
+                self.surface.configure(device.wgpu_device(), &self.config);
+                return Ok(Presented::Skipped(SkipReason::Outdated));
+            }
+            wgpu::CurrentSurfaceTexture::Occluded => {
+                return Ok(Presented::Skipped(SkipReason::Occluded));
+            }
+            wgpu::CurrentSurfaceTexture::Timeout => {
+                tracing::debug!("acquiring the next frame timed out, skipping");
+                return Ok(Presented::Skipped(SkipReason::Timeout));
             }
 
             wgpu::CurrentSurfaceTexture::Validation => {
@@ -285,7 +334,7 @@ impl WindowSurface {
         // the frame.
         queue.present(frame);
 
-        Ok(stats)
+        Ok(Presented::Drawn(stats))
     }
 }
 

@@ -18,7 +18,7 @@ First frame on screen, and — more importantly — the first proof that the sim
 - GPU frustum culling compute pass.
 - Debug draw: lines, spheres, AABBs, arrows, world-space text.
 - egui overlay with tick counter, frame graph, and time controls.
-- Free-fly camera.
+- ~~Free-fly camera~~ **done** — `cx-app::flycam`, with the floating origin following it.
 - `tools/graph-viewer`: the isometric architecture viewer over the M0 graph export, with stable layout and `--baseline` diff (S21). Independent of the renderer above — it is a static page, not engine code — but it lands here because M1 is the first milestone with enough modules and systems registered for the diagram to be worth looking at.
 - **Tile layout fixed** (`TILE_CELLS = 64`, 256 tiles per chunk) and dirty-tracking bitsets stubbed in. Mesh layout depends on this and M4B cannot retrofit it (`ADR-0011`). Safe to fix now that `ADR-0013` settled terrain representation as a heightfield.
 
@@ -197,6 +197,47 @@ server required to notice it.
 The test that covers this runs **two** ticks, not one. Written with a single tick
 it passed with the copy removed, because the seeded `PreviousTransform` already
 equalled what the copy would have written.
+
+## The camera, and what it brought with it
+
+`cx-app::flycam` holds all the arithmetic; `cx-app::window` holds only the key
+table. Everything with a failure mode is on the testable side of that line:
+
+- **Position is a `WorldPos`, not a `Vec3`.** The camera can fly a long way, and
+  at 100 km an absolute `f32` has about a centimetre of resolution. Storing it
+  chunk-relative also makes the camera the natural source of the **extract
+  origin**, which the frame loop now follows — so whatever is near the eye keeps
+  a small local offset and therefore its precision. That is the floating origin
+  actually doing its job, rather than being a fixed constant.
+- **Pitch is clamped just short of vertical.** At exactly 90° the view direction
+  is parallel to up, `look_at` cannot pick a roll, and the matrix comes out full
+  of `NaN` — a black screen with no error.
+- **Yaw wraps rather than accumulating.** After long enough turning one way, an
+  unwrapped `f32` yaw can no longer resolve a small turn and the view ratchets.
+- **Diagonal movement is normalized**, and "up" is world up rather than camera
+  up, so ascending while looking down does not drift you forwards.
+
+## An occluded window was spinning at 14,000 fps
+
+Running the client while it sat behind another window revealed that the frame
+loop was skipping every frame — and then immediately asking for another, because
+`ControlFlow::Poll` never waits. **33,348 skipped frames in four seconds**, all
+drawing nothing, burning a core.
+
+Two things were wrong and both are fixed:
+
+1. **A skipped frame was invisible.** `present` returned `DrawStats { draw_calls: 0 }`,
+   which is also exactly what an empty scene produces. It now returns
+   `Presented::{Drawn, Skipped(SkipReason)}`, and the per-second report counts
+   skips, so `draw_calls=0` is no longer ambiguous.
+2. **Nothing backed off.** A persistent skip — an occluded window stays occluded
+   until someone moves it — now schedules a ~60 Hz retry instead of spinning.
+   Transient reasons (`Lost`, `Outdated`, `Timeout`) deliberately do *not* back
+   off: the surface has just been reconfigured and waiting would add 16 ms of
+   stutter to every resize.
+
+The simulation keeps ticking at 30 Hz throughout. Being behind another window is
+not being paused.
 
 ## Known inefficiency in the frame path
 

@@ -27,10 +27,12 @@
 
 pub mod controls;
 pub mod error;
+pub mod flycam;
 pub mod frame;
 pub mod window;
 
 pub use controls::{Action, Response};
 pub use error::AppError;
+pub use flycam::{FlyCamera, LookIntent, MoveIntent};
 pub use frame::{FrameLoop, FrameReport};
 pub use window::{WindowConfig, run};
