@@ -62,36 +62,56 @@ jobs:
       # not a fast one, and Linux runners have no GPU. Frame *rate* from a
       # software rasterizer is meaningless and is not gated here; see the M1
       # milestone for how that is measured instead.
-      # This step hung for over two hours once, with no output, and nothing
-      # stopped it: `apt-get` was waiting on the runner's own unattended-upgrade
-      # holding the dpkg lock. Three things changed as a result.
+      # This step has failed two different ways, and both are recorded here
+      # because the fix for each is a different line.
       #
-      # 1. `timeout-minutes`. An install that takes longer than five minutes is
-      #    stuck, and failing then beats burning six hours to learn the same
-      #    thing.
-      # 2. `DEBIAN_FRONTEND=noninteractive` and `-o DPkg::Lock::Timeout`. The
-      #    first stops a debconf prompt waiting for a terminal that will never
-      #    answer; the second makes apt give up on the lock rather than block on
-      #    it forever.
-      # 3. `vulkan-tools` is gone. It was installed only for `vulkaninfo`, and
-      #    the adapter name it reported is already in the log: `frame_cost` and
-      #    `debug_draw` both print the device alongside their measurements, and
-      #    both run with --nocapture in the recording step below. Removing it
-      #    drops a large dependency tree from the critical path of every Linux
-      #    run.
+      # **It hung for over two hours** with no output: apt was blocking on the
+      # runner's own unattended-upgrade holding the dpkg lock, and GitHub's
+      # default six-hour job timeout did nothing about it. Hence
+      # `timeout-minutes`, `DEBIAN_FRONTEND=noninteractive`, and
+      # `DPkg::Lock::Timeout`.
       #
-      #    If those two tests ever stop printing it, the adapter name leaves the
-      #    log with them — which is the tradeoff being made here deliberately
-      #    rather than by accident.
+      # **Then it timed out at five minutes, silently.** `-qq` suppresses all
+      # output, so a stall was indistinguishable from slow progress and there
+      # was nothing in the log to diagnose. Three changes:
+      #
+      # 1. `-q` rather than `-qq`, so progress is visible and a future stall
+      #    says where it stopped.
+      # 2. `apt-get install` is tried *before* `apt-get update`. The runner
+      #    image ships package lists only days old, `update` refreshes a dozen
+      #    repositories this build does not use, and it is the slow half. The
+      #    update path is still there as a fallback for when the lists really
+      #    are stale.
+      # 3. `--no-install-recommends`. The recommended set pulls in a large tree
+      #    that a software rasterizer does not need.
+      #
+      # `vulkan-tools` is not installed. It was there only for `vulkaninfo`, and
+      # the adapter name is already in the log: `frame_cost` and `debug_draw`
+      # both print the device with their measurements, and both run with
+      # --nocapture in the recording step below. If those two stop printing it,
+      # the adapter name leaves the log with them — a tradeoff made deliberately
+      # rather than by accident.
       - name: Install a software Vulkan adapter
         if: runner.os == 'Linux'
-        timeout-minutes: 5
+        timeout-minutes: 8
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           set -euo pipefail
-          sudo apt-get -o DPkg::Lock::Timeout=120 update -qq
-          sudo apt-get -o DPkg::Lock::Timeout=120 install -y -qq mesa-vulkan-drivers
+
+          install() {
+            sudo apt-get -o DPkg::Lock::Timeout=120 install -y -q \
+              --no-install-recommends mesa-vulkan-drivers
+          }
+
+          # The fast path: the image's package lists are usually fresh enough.
+          if install; then
+            echo "installed from the image's existing package lists"
+          else
+            echo "install failed; refreshing package lists and retrying"
+            sudo apt-get -o DPkg::Lock::Timeout=120 update -q
+            install
+          fi
 
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets
