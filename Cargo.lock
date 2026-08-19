@@ -982,6 +982,7 @@ dependencies = [
  "cx-fields",
  "cx-module",
  "cx-time",
+ "cx-worldgen",
 ]
 
 [[package]]
@@ -1024,6 +1025,14 @@ dependencies = [
 [[package]]
 name = "cx-worldgen"
 version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "cx-core",
+ "cx-ecs",
+ "cx-fields",
+ "cx-module",
+ "tracing",
+]
 
 [[package]]
 name = "derive_more"

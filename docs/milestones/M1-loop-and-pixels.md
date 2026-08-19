@@ -262,7 +262,21 @@ Three of its tests are about mistakes that produce *silence* rather than errors:
   as a tile that never rebuilds, one chunk-edge away from the edit that caused
   it.
 
-## The graph viewer's premise does not hold yet
+## The graph viewer's premise — now partly true
+
+**Update.** `cx-worldgen` is a module, so the graph is no longer a single box.
+`--profile terrain` now exports two modules, a `requires` edge between them, two
+systems in different phases, and a field with an owner and a declared writer:
+
+```
+modules 2 · capabilities 2 · systems 2 · field_access 1
+```
+
+Still small, but it has every *kind* of element the viewer draws, which is what a
+layout algorithm needs to be developed against. `cx-spatial`, `cx-agents`, and
+`cx-physics` are next.
+
+## The original finding, for the record
 
 M1 lists `tools/graph-viewer` and says it belongs here because M1 is "the first
 milestone with enough modules and systems registered for the diagram to be worth

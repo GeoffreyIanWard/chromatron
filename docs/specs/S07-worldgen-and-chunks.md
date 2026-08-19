@@ -1,7 +1,7 @@
 ---
 id: S07
 title: Worldgen, Erosion & Chunk Lifecycle
-status: not started
+status: partial (base elevation at M2)
 depends_on: [S01, S06]
 provides: [world-map, block-generation, erosion, flow-network, biomes, chunk-states, streaming]
 crates_touched: [cx-worldgen]
@@ -83,3 +83,29 @@ Not a terrain editor. No live worldgen parameter tweaking with in-place regenera
 
 - **Halo width vs. erosion iteration count.** The influence radius of erosion grows with iterations; a 2-chunk halo bounds it only up to some iteration count. Beyond that, fine erosion detail cannot be perfectly continuous across block seams. Rivers stay coherent because the region-level drainage network constrains them from above, but hillside detail may show a faint seam. This needs a visual check at M2 — the mitigations, in order of preference, are a wider halo, fewer iterations with stronger per-iteration effect, or a post-pass seam blend.
 - Block size. 8 km is a guess balancing generation latency against seam frequency. Measure at M2.
+
+## What is implemented
+
+**Step 1 only: base elevation.** `cx_worldgen::ElevationGenerator` is a pure
+function of `(world_seed, position)` — value noise from a positional hash, with
+no permutation table and no initialisation, so there is nothing to get out of
+sync between a generation run and a later regeneration of the same block
+(`ADR-0006`).
+
+`WorldgenModule` declares it: provides `terrain`, **requires** `fields`, owns
+`ELEVATION`, and declares `generate_elevation` as a writer of it. That makes it
+the first module with a dependency, and the first entry in S21's field-access
+layer.
+
+Steps 2–9 are M2 and deliberately absent: depression fill, flow routing,
+hydraulic and thermal erosion, channel carving, biome assignment, and scatter.
+They are block-granular and iterative, and none of them can be approximated
+per-cell.
+
+**The terrain therefore looks smooth, and should.** A plausible-looking
+placeholder would have hidden exactly the difference erosion makes, which is the
+one thing worth being able to see when it lands.
+
+`ELEVATION` is registered `DeltaPersisted` with a one-cell halo and tile dirty
+tracking, per `ADR-0011` — an untouched chunk costs zero bytes because it can be
+regenerated from the seed.
