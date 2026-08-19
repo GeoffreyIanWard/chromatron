@@ -79,27 +79,43 @@ The first attempt made this a CI gate on the assumption that skipping the pixel 
 made it a CPU-only measurement. **That assumption is false**, and CI proved it by failing on
 all three platforms at once:
 
-| Device | p99 | median |
-|---|---|---|
-| Apple M4 Pro (Metal) | 3.5 ms | 2.4 ms |
-| lavapipe (Ubuntu runner, software Vulkan) | 30.0 ms | 23.0 ms |
-| macOS runner | 82.0 ms | 5.8 ms |
-| WARP (Windows runner, software D3D12) | 105.4 ms | 100.2 ms |
+10,000 entities at 640x360, as the tests report it:
+
+| Device | p99 | median | run-to-run |
+|---|---|---|---|
+| Apple M4 Pro (Metal, integrated GPU) — developer machine | 3.5 ms | 2.4 ms | — |
+| `llvmpipe (LLVM 20.1.2, 256 bits)` (Vulkan, software rasterizer) — Ubuntu runner | 34.1 ms | 27.0 ms | 30.0 / 23.0 ms on an earlier run |
+| `Apple Paravirtual device` (Metal, integrated GPU) — macOS runner | 11.7 ms | 6.1 ms | 82.0 / 5.8 ms on an earlier run |
+| `Microsoft Basic Render Driver` (DirectX 12, software rasterizer) — Windows runner | 26.8 ms | 20.7 ms | 105.4 / 100.2 ms on an earlier run |
 
 `queue.submit` applies backpressure: when the GPU cannot keep up, submit blocks, and the
 GPU's cost lands in the caller's wall-clock timing. On fast hardware that is invisible. On a
 software rasterizer it dominates — WARP's 100 ms median is it rasterizing 120,000 triangles,
 not this project's code.
 
+**Run-to-run variance makes the case even more strongly than the device spread does.** The
+Windows runner measured a 100 ms median on one run and 21 ms on the next, from identical
+code. A threshold that admits a 5x swing on the same platform is not measuring the code.
+
 Isolating the genuinely hardware-independent part does not rescue a gate either: sim and
 extract alone measure p99 2.2 ms on an M4 Pro, and a runner 2–4x slower would land at 4–9 ms
 against any 8 ms budget. There is no threshold there that is both meaningful and not flaky.
+
+**A note on classifying devices.** `DeviceInfo::is_software()` reports the macOS runner's
+`Apple Paravirtual device` as *not* software, because it presents as an integrated GPU — yet
+it is a VM and its numbers are no more representative of real hardware than lavapipe's. "Not
+software" therefore does not mean "reference hardware", and any automated check keyed on the
+device *kind* alone would be fooled. The full device name is what carries the truth, which is
+why the recorded line prints it.
 
 So frame time follows the same rule as the other hardware-dependent numbers: **recorded with
 the device that produced it**. What the test asserts instead is hardware-independent — that a
 30 Hz simulation rendered at 144 Hz ticks roughly one frame in five (measured 62/300 = 20.7%),
 and that a tickless frame still extracts every entity. Both are real bugs when they break,
 and both are catchable on any machine.
+
+That assertion held identically — **62 of 300 frames** — on all four devices, across a 10x
+spread in frame cost. Which is exactly the property a hardware-independent check should have.
 
 ## Known inefficiency in the frame path
 

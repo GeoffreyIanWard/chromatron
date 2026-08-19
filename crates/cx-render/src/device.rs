@@ -127,6 +127,12 @@ impl DeviceInfo {
     ///
     /// The renderer runs on one happily; a *frame rate* measured on one is not
     /// comparable to hardware and must not be recorded as though it were.
+    ///
+    /// **This is not the same question as "is this reference hardware".** A
+    /// macOS CI runner reports `Apple Paravirtual device` as an integrated GPU,
+    /// so this returns `false`, yet it is a VM whose numbers are no more
+    /// representative than lavapipe's. Anything deciding whether a measurement
+    /// is comparable should look at [`DeviceInfo::name`] too, not this alone.
     pub const fn is_software(&self) -> bool {
         matches!(self.kind, DeviceKind::Cpu)
     }
