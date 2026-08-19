@@ -41,6 +41,7 @@ First frame on screen, and — more importantly — the first proof that the sim
 | `extract_100k_instances` | < 2 ms | 626 µs | 3.2x headroom |
 | `render_100k_instances_fps` — draw-call clause | < 20 | **1** | instancing; runs anywhere |
 | `render_100k_instances_fps` — fps clause | ≥ 60 fps | not measured | needs hardware, see below |
+| `frame_time_p99_30hz_sim_144hz_render` | < 8 ms | recorded per device, see below | not gated in CI — see below |
 
 ## Resolved: how the GPU-dependent gates are measured
 
@@ -52,7 +53,7 @@ measured honestly where**:
 | Clause | Where it runs | Why |
 |---|---|---|
 | Draw-call counts, pixel correctness, zero validation errors | CI, on lavapipe | Hardware-independent properties. Identical on a laptop, a runner, and a workstation. |
-| CPU-side frame cost (extract, encode, submit) | CI | The half of frame time this project controls. Arrives with `WindowedDriver`. |
+| ~~CPU-side frame cost~~ | ~~CI~~ | **This turned out not to be separable** — see the section below. Submit backpressure puts GPU cost into any wall-clock frame measurement, so frame time is recorded per device instead. |
 | Absolute frame rate | Named reference hardware, recorded in `bench/baselines.md` | A number from a software rasterizer is not comparable to a GPU. Recording it with its hardware is the same pattern M0's CI/dev columns already use. |
 
 A self-hosted GPU runner was rejected rather than deferred: this repository is public, so a
@@ -71,6 +72,66 @@ container stays usable — but cargo swallows a passing test's output, which mea
 run was indistinguishable from one that rendered nothing. CI now sets `CX_REQUIRE_GPU=1`,
 which turns a missing adapter into a failure. Locally the variable is unset and the skip
 still applies.
+
+## Frame time is recorded, not gated — and here is why
+
+The first attempt made this a CI gate on the assumption that skipping the pixel readback
+made it a CPU-only measurement. **That assumption is false**, and CI proved it by failing on
+all three platforms at once:
+
+10,000 entities at 640x360, as the tests report it:
+
+| Device | p99 | median | run-to-run |
+|---|---|---|---|
+| Apple M4 Pro (Metal, integrated GPU) — developer machine | 3.5 ms | 2.4 ms | — |
+| `llvmpipe (LLVM 20.1.2, 256 bits)` (Vulkan, software rasterizer) — Ubuntu runner | 34.1 ms | 27.0 ms | 30.0 / 23.0 ms on an earlier run |
+| `Apple Paravirtual device` (Metal, integrated GPU) — macOS runner | 11.7 ms | 6.1 ms | 82.0 / 5.8 ms on an earlier run |
+| `Microsoft Basic Render Driver` (DirectX 12, software rasterizer) — Windows runner | 26.8 ms | 20.7 ms | 105.4 / 100.2 ms on an earlier run |
+
+`queue.submit` applies backpressure: when the GPU cannot keep up, submit blocks, and the
+GPU's cost lands in the caller's wall-clock timing. On fast hardware that is invisible. On a
+software rasterizer it dominates — WARP's 100 ms median is it rasterizing 120,000 triangles,
+not this project's code.
+
+**Run-to-run variance makes the case even more strongly than the device spread does.** The
+Windows runner measured a 100 ms median on one run and 21 ms on the next, from identical
+code. A threshold that admits a 5x swing on the same platform is not measuring the code.
+
+Isolating the genuinely hardware-independent part does not rescue a gate either: sim and
+extract alone measure p99 2.2 ms on an M4 Pro, and a runner 2–4x slower would land at 4–9 ms
+against any 8 ms budget. There is no threshold there that is both meaningful and not flaky.
+
+**A note on classifying devices.** `DeviceInfo::is_software()` reports the macOS runner's
+`Apple Paravirtual device` as *not* software, because it presents as an integrated GPU — yet
+it is a VM and its numbers are no more representative of real hardware than lavapipe's. "Not
+software" therefore does not mean "reference hardware", and any automated check keyed on the
+device *kind* alone would be fooled. The full device name is what carries the truth, which is
+why the recorded line prints it.
+
+So frame time follows the same rule as the other hardware-dependent numbers: **recorded with
+the device that produced it**. What the test asserts instead is hardware-independent — that a
+30 Hz simulation rendered at 144 Hz ticks roughly one frame in five (measured 62/300 = 20.7%),
+and that a tickless frame still extracts every entity. Both are real bugs when they break,
+and both are catchable on any machine.
+
+That assertion held identically — **62 of 300 frames** — on all four devices, across a 10x
+spread in frame cost. Which is exactly the property a hardware-independent check should have.
+
+## Known inefficiency in the frame path
+
+`InstancedRenderer::render` currently creates the colour target, the depth target, and the
+instance buffer **every frame**. That is wasteful, and it is part of what the recorded frame
+costs above are paying for.
+
+Pooling those resources is the obvious fix and is deliberately not done yet: the loop needed
+to exist before optimising it was meaningful. Worth doing before instance counts approach the
+100,000 the render gate names — and the recorded per-device numbers are the before-picture to
+compare against.
+
+A per-frame **allocation count** would be a genuinely hardware-independent gate for this,
+in the same shape as `alloc_per_tick_sim_code` (`ADR-0014`). It is not added yet because it
+would fail immediately against the behaviour described above; it belongs with the pooling
+work that makes it passable.
 
 ## Notes
 

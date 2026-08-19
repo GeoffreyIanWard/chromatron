@@ -7,8 +7,16 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+cx-core.workspace = true
+cx-ecs.workspace = true
+cx-time.workspace = true
+cx-render.workspace = true
+cx-view.workspace = true
 
 # Below the firewall: the strict sim lint set does not apply here.
 # See the workspace manifest and 03-conventions.md.
+[dev-dependencies]
+cx-time.workspace = true
+
 [lints.rust]
 unsafe_code = "warn"

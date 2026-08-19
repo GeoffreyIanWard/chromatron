@@ -258,55 +258,76 @@ fn banned_external_matcher_covers_crate_families() {
     }
 }
 
-/// The one crate permitted to name `wgpu` types (`ADR-0005`, `ADR-0010`).
-const RENDER_CRATE: &str = "cx-render";
-
-/// `wgpu` may be a direct dependency of `cx-render` and nothing else.
+/// Which crate owns each contained external dependency.
 ///
-/// `ADR-0005` proposed a backend-agnostic render API so a console backend could
-/// be added later; `ADR-0010` put console out of scope, which removed that
-/// abstraction's only consumer. What survived is the **crate boundary**: no
-/// `wgpu` type appears outside `cx-render`, so graphics code cannot spread into
-/// gameplay and a future port stays a contained project.
+/// `02-architecture.md` assigns each of these to exactly one crate: `wgpu` to
+/// the renderer (`ADR-0005`, `ADR-0010`), windowing to the app shell, audio to
+/// `cx-audio`, and the debug UI to `cx-ui`. Containment is per-library, not a
+/// blanket "only the renderer touches anything graphical" — an earlier version
+/// of this check said the latter, which would have blocked `cx-app` from
+/// declaring `winit` at all.
+///
+/// The value is what containment buys: graphics code cannot spread into
+/// gameplay, and swapping any one of these stays a contained project rather
+/// than an archaeology exercise.
+const EXTERNAL_OWNERS: &[(&str, &str)] = &[
+    ("wgpu", "cx-render"),
+    ("winit", "cx-app"),
+    ("kira", "cx-audio"),
+    ("rodio", "cx-audio"),
+    ("cpal", "cx-audio"),
+    ("egui", "cx-ui"),
+    ("eframe", "cx-ui"),
+];
+
+/// The crate permitted to declare `name`, if it is a contained dependency.
+fn owner_of(name: &str) -> Option<&'static str> {
+    EXTERNAL_OWNERS
+        .iter()
+        .find(|(family, _)| name == *family || name.starts_with(&format!("{family}-")))
+        .map(|(_, owner)| *owner)
+}
+
+/// Each contained external dependency may be declared only by its owning crate.
 ///
 /// Checked on *direct* dependencies rather than transitive ones, deliberately.
-/// `cx-app` will depend on `cx-render` and therefore link `wgpu` — that is the
+/// `cx-app` will link `wgpu` transitively through `cx-render` — that is the
 /// point of having a renderer. What must not happen is another crate declaring
-/// `wgpu` itself, because that is what naming its types requires.
+/// it, because that is what naming its types requires.
 #[test]
-fn only_the_render_crate_depends_on_wgpu() {
+fn contained_dependencies_are_declared_only_by_their_owner() {
     let metadata = load_metadata();
     let mut violations = Vec::new();
 
     for package in metadata.workspace_packages() {
         let name = package.name.to_string();
-        if name == RENDER_CRATE {
-            continue;
-        }
 
         for dependency in &package.dependencies {
             // Dev-dependencies are excluded for the same reason as elsewhere:
-            // test code never ships inside the engine. A test that wants to
-            // poke at wgpu directly is not spreading graphics into gameplay.
+            // test code never ships inside the engine.
             if dependency.kind != DependencyKind::Normal && dependency.kind != DependencyKind::Build
             {
                 continue;
             }
 
-            if is_banned_external(&dependency.name) {
-                violations.push(format!("  {name} → {}", dependency.name));
+            if let Some(owner) = owner_of(&dependency.name)
+                && owner != name
+            {
+                violations.push(format!(
+                    "  {name} → {} (only {owner} may declare it)",
+                    dependency.name
+                ));
             }
         }
     }
 
     assert!(
         violations.is_empty(),
-        "only `{RENDER_CRATE}` may depend on graphics, windowing, or audio crates \
-         directly:\n{}\n\n\
-         ADR-0010 kept the cx-render crate boundary after ADR-0005's abstraction was dropped: \
-         no wgpu type may appear outside it. If another crate needs something the renderer \
-         has, the renderer should expose it as plain data — that is what cx-view's \
-         ExtractedInstance is for.",
+        "contained dependencies were declared outside their owning crate:\n{}\n\n\
+         02-architecture.md gives each of these exactly one home so that graphics, windowing, \
+         and audio cannot spread through the codebase. If another crate needs something the \
+         owner has, the owner should expose it as plain data — that is what cx-view's \
+         ExtractedInstance and cx-render's DeviceInfo are for.",
         violations.join("\n")
     );
 }

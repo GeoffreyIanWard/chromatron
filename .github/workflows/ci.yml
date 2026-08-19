@@ -80,6 +80,17 @@ jobs:
           CX_REQUIRE_GPU: '1'
         run: cargo test --workspace
 
+      # Numbers that are recorded rather than gated — frame cost, adapter names —
+      # are printed by tests that pass, and cargo swallows a passing test's
+      # output. Re-running them with --nocapture is what actually puts them in
+      # the log; without this the "recording" records nothing.
+      - name: Record hardware-dependent measurements
+        env:
+          CX_REQUIRE_GPU: '1'
+        run: |
+          cargo test -p cx-app --test frame_cost -- --nocapture
+          cargo test -p cx-render --test draw_calls -- --nocapture
+
   # Gates-first: these compile and run only once their crate's feature is
   # switched on by the commit that implements it. The step is expected to be a
   # no-op until then, and is wired up now so that enabling a feature cannot
