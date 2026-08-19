@@ -26,18 +26,19 @@ use std::time::{Duration, Instant};
 
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::{ElementState, KeyEvent, WindowEvent};
+use winit::event::{DeviceEvent, DeviceId, ElementState, KeyEvent, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 use cx_core::Fixed;
 use cx_ecs::{SimSchedule, SimWorld};
-use cx_render::{Camera, WindowSurface};
+use cx_render::WindowSurface;
 use cx_time::TickRate;
 
 use crate::controls::{Action, Response, respond};
 use crate::error::AppError;
+use crate::flycam::{FlyCamera, LookIntent, MoveIntent};
 use crate::frame::{FrameLoop, FrameReport};
 
 /// How the window should open.
@@ -68,6 +69,16 @@ impl Default for WindowConfig {
     }
 }
 
+/// How long to wait before trying again after a frame was skipped for a reason
+/// that will not clear on its own.
+///
+/// Roughly a 60 Hz retry. Without it the loop spins at whatever rate the CPU
+/// allows — 14,000 frames a second, measured, all of them drawing nothing —
+/// because `ControlFlow::Poll` never waits and an occluded window stays occluded
+/// until someone moves it. The simulation still ticks at 30 Hz through this,
+/// which is the point: being behind another window is not being paused.
+const IDLE_RETRY: Duration = Duration::from_millis(16);
+
 /// How often the loop reports what it is doing.
 ///
 /// S03 requires falling behind to be visible; this is the other half of that —
@@ -89,6 +100,113 @@ const BINDINGS: &[(KeyCode, Action)] = &[
     (KeyCode::Backslash, Action::NormalSpeed),
 ];
 
+/// How far the camera turns per pixel of mouse movement, in radians.
+///
+/// Roughly 640 pixels for a half turn, which is a conventional starting point.
+/// Not configurable yet; when it becomes so, this is the default it starts from.
+const LOOK_SENSITIVITY: f32 = 0.0025;
+
+/// One direction of camera movement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Axis {
+    Forward,
+    Back,
+    Left,
+    Right,
+    Up,
+    Down,
+    Boost,
+}
+
+/// Movement keys. Held rather than pressed, so they are a separate table from
+/// [`BINDINGS`], whose actions fire once per press.
+const MOVEMENT: &[(KeyCode, Axis)] = &[
+    (KeyCode::KeyW, Axis::Forward),
+    (KeyCode::KeyS, Axis::Back),
+    (KeyCode::KeyA, Axis::Left),
+    (KeyCode::KeyD, Axis::Right),
+    (KeyCode::KeyE, Axis::Up),
+    (KeyCode::KeyQ, Axis::Down),
+    (KeyCode::ShiftLeft, Axis::Boost),
+];
+
+/// Which movement keys are currently down.
+///
+/// Tracked here rather than read from the OS because key *events* are what
+/// arrive: without this, releasing a key while the window is unfocused would
+/// leave the camera flying forever.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Held {
+    forward: bool,
+    back: bool,
+    left: bool,
+    right: bool,
+    up: bool,
+    down: bool,
+    boost: bool,
+}
+
+impl Held {
+    fn set(&mut self, axis: Axis, pressed: bool) {
+        let slot = match axis {
+            Axis::Forward => &mut self.forward,
+            Axis::Back => &mut self.back,
+            Axis::Left => &mut self.left,
+            Axis::Right => &mut self.right,
+            Axis::Up => &mut self.up,
+            Axis::Down => &mut self.down,
+            Axis::Boost => &mut self.boost,
+        };
+        *slot = pressed;
+    }
+
+    /// Opposite keys cancel, so holding both is standing still rather than
+    /// whichever was pressed last.
+    fn intent(self) -> MoveIntent {
+        MoveIntent {
+            forward: axis_value(self.forward, self.back),
+            right: axis_value(self.right, self.left),
+            up: axis_value(self.up, self.down),
+            boost: self.boost,
+        }
+    }
+}
+
+const fn axis_value(positive: bool, negative: bool) -> f32 {
+    match (positive, negative) {
+        (true, false) => 1.0,
+        (false, true) => -1.0,
+        _ => 0.0,
+    }
+}
+
+/// How the loop should wait before the next frame.
+///
+/// The one other place a wall-clock read is legitimate, for the same reason as
+/// [`WindowedApp::elapsed`]: it schedules a wake-up and never reaches the
+/// simulation.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "scheduling the next wake-up needs the current instant; nothing here enters the \
+              simulation, and ADR-0004's rule is about sim logic"
+)]
+fn pacing_for(report: &FrameReport) -> ControlFlow {
+    match report.skipped {
+        Some(reason) if reason.is_persistent() => {
+            ControlFlow::WaitUntil(Instant::now() + IDLE_RETRY)
+        }
+        _ => ControlFlow::Poll,
+    }
+}
+
+/// The movement axis a physical key means, if any.
+fn axis_for(key: KeyCode) -> Option<Axis> {
+    MOVEMENT
+        .iter()
+        .find(|(bound, _)| *bound == key)
+        .map(|(_, axis)| *axis)
+}
+
 /// The action a physical key means, if any.
 fn action_for(key: KeyCode) -> Option<Action> {
     BINDINGS
@@ -108,7 +226,7 @@ pub fn run(
     config: WindowConfig,
     world: SimWorld,
     schedule: SimSchedule,
-    camera: Camera,
+    camera: FlyCamera,
 ) -> Result<(), AppError> {
     let event_loop = EventLoop::new().map_err(|source| AppError::EventLoop {
         reason: source.to_string(),
@@ -133,6 +251,9 @@ pub fn run(
         failure: None,
         since_report: None,
         frames_since_report: 0,
+        skipped_since_report: 0,
+        held: Held::default(),
+        looking: false,
     };
 
     event_loop
@@ -165,12 +286,17 @@ struct WindowedApp {
     frame_loop: FrameLoop,
     world: SimWorld,
     schedule: SimSchedule,
-    camera: Camera,
+    camera: FlyCamera,
     active: Option<Active>,
     last_frame: Option<Instant>,
     failure: Option<AppError>,
     since_report: Option<Instant>,
     frames_since_report: u32,
+    skipped_since_report: u32,
+    held: Held,
+    /// Whether the look button is down. Mouse movement only turns the camera
+    /// while it is, so the cursor stays usable for everything else.
+    looking: bool,
 }
 
 impl WindowedApp {
@@ -235,6 +361,9 @@ impl WindowedApp {
     )]
     fn report_progress(&mut self, report: &FrameReport) {
         self.frames_since_report += 1;
+        if report.skipped.is_some() {
+            self.skipped_since_report += 1;
+        }
 
         let now = Instant::now();
         let started = *self.since_report.get_or_insert(now);
@@ -248,17 +377,42 @@ impl WindowedApp {
             tick = self.frame_loop.tick().0,
             instances = report.extracted,
             draw_calls = report.draw.map_or(0, |stats| stats.draw_calls),
+            // Skipped frames counted rather than logged individually: an
+            // occluded window produces tens of thousands a second, and a line
+            // each would be the only thing in the log.
+            skipped = self.skipped_since_report,
             control = ?self.frame_loop.control(),
+            // The camera, so flying is verifiable from a log rather than only
+            // by looking at the screen.
+            camera_chunk = ?self.camera.origin(),
+            camera_local = ?self.camera.position.local,
+            heading = self.camera.yaw().to_degrees().round(),
             "running"
         );
 
         self.since_report = Some(now);
         self.frames_since_report = 0;
+        self.skipped_since_report = 0;
     }
 
     /// Runs and presents one frame.
     fn draw(&mut self) -> Result<FrameReport, AppError> {
         let delta = self.elapsed();
+
+        // The camera moves in real seconds, not ticks: it is view state, below
+        // the firewall, and pinning it to 30 Hz would make it stutter on a
+        // 120 Hz display for no reason.
+        self.camera.advance(self.held.intent(), delta.as_secs_f32());
+
+        // Follow the camera with the extract origin, which is the whole point of
+        // having a floating origin: whatever is near the eye keeps a small local
+        // offset and therefore its precision.
+        self.frame_loop.set_origin(self.camera.origin());
+
+        // Built against the origin the frame is about to extract with, so the
+        // camera and the world end up in the same space.
+        let camera = self.camera.camera(self.frame_loop.origin());
+
         let Some(active) = self.active.as_mut() else {
             return Err(AppError::NoWindow);
         };
@@ -267,7 +421,7 @@ impl WindowedApp {
             &mut self.world,
             &mut self.schedule,
             &mut active.surface,
-            &self.camera,
+            &camera,
             delta,
         )?;
 
@@ -340,22 +494,50 @@ impl ApplicationHandler for WindowedApp {
                 event:
                     KeyEvent {
                         physical_key: PhysicalKey::Code(code),
-                        state: ElementState::Pressed,
+                        state,
                         repeat: false,
                         ..
                     },
                 ..
             } => {
-                if let Some(action) = action_for(code)
+                let pressed = state == ElementState::Pressed;
+
+                if let Some(axis) = axis_for(code) {
+                    self.held.set(axis, pressed);
+                } else if pressed
+                    && let Some(action) = action_for(code)
                     && self.handle(action)
                 {
                     event_loop.exit();
                 }
             }
 
+            WindowEvent::MouseInput {
+                state,
+                button: MouseButton::Right,
+                ..
+            } => {
+                self.looking = state == ElementState::Pressed;
+            }
+
+            // Losing focus releases everything. Key-up is delivered to whoever
+            // has focus, so without this, alt-tabbing mid-movement leaves the
+            // camera flying with no way to stop it.
+            WindowEvent::Focused(false) => {
+                self.held = Held::default();
+                self.looking = false;
+            }
+
             WindowEvent::RedrawRequested => {
                 match self.draw() {
-                    Ok(report) => self.report_progress(&report),
+                    Ok(report) => {
+                        // Back off when nothing is being shown, rather than
+                        // spinning. `Poll` is right while frames are landing and
+                        // wrong the moment they stop.
+                        event_loop.set_control_flow(pacing_for(&report));
+
+                        self.report_progress(&report);
+                    }
                     Err(error) => self.fail(event_loop, error),
                 }
 
@@ -368,6 +550,27 @@ impl ApplicationHandler for WindowedApp {
             }
 
             _ => {}
+        }
+    }
+
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: DeviceId,
+        event: DeviceEvent,
+    ) {
+        // Raw motion rather than cursor position, so looking is not bounded by
+        // the edges of the screen.
+        if let DeviceEvent::MouseMotion { delta } = event
+            && self.looking
+        {
+            let (dx, dy) = delta;
+            self.camera.look(LookIntent {
+                // Moving the mouse right should turn right, and positive yaw
+                // turns left, hence the negation.
+                yaw: -dx as f32 * LOOK_SENSITIVITY,
+                pitch: -dy as f32 * LOOK_SENSITIVITY,
+            });
         }
     }
 
@@ -420,6 +623,112 @@ mod tests {
     #[test]
     fn unbound_keys_do_nothing() {
         assert_eq!(action_for(KeyCode::Escape), Some(Action::Quit));
-        assert_eq!(action_for(KeyCode::KeyQ), None);
+        assert_eq!(action_for(KeyCode::KeyM), None);
+        assert_eq!(axis_for(KeyCode::KeyM), None);
+    }
+
+    #[test]
+    fn movement_and_action_keys_do_not_overlap() {
+        // A key in both tables would move the camera *and* fire an action. `Q`
+        // was in both at one point, as descend and as an unused quit binding.
+        for (key, axis) in MOVEMENT {
+            assert!(
+                action_for(*key).is_none(),
+                "{key:?} is bound to both {axis:?} and an action"
+            );
+        }
+    }
+
+    #[test]
+    fn every_movement_axis_is_bound() {
+        for axis in [
+            Axis::Forward,
+            Axis::Back,
+            Axis::Left,
+            Axis::Right,
+            Axis::Up,
+            Axis::Down,
+            Axis::Boost,
+        ] {
+            assert!(
+                MOVEMENT.iter().any(|(_, bound)| *bound == axis),
+                "{axis:?} has no key"
+            );
+        }
+    }
+
+    #[test]
+    fn opposite_keys_cancel() {
+        let mut held = Held::default();
+        held.set(Axis::Forward, true);
+        assert_eq!(held.intent().forward, 1.0);
+
+        held.set(Axis::Back, true);
+        assert!(
+            held.intent().is_still(),
+            "holding both directions should stand still, not pick one"
+        );
+
+        held.set(Axis::Forward, false);
+        assert_eq!(held.intent().forward, -1.0);
+    }
+
+    #[test]
+    fn releasing_everything_stops_the_camera() {
+        // What `Focused(false)` relies on: a default `Held` must be motionless.
+        let mut held = Held::default();
+        for axis in [Axis::Forward, Axis::Right, Axis::Up, Axis::Boost] {
+            held.set(axis, true);
+        }
+        assert!(!held.intent().is_still());
+        assert!(Held::default().intent().is_still());
+    }
+
+    fn report_with(skipped: Option<cx_render::SkipReason>) -> FrameReport {
+        FrameReport {
+            ticks: 1,
+            alpha: 0.0,
+            extracted: 0,
+            draw: None,
+            skipped,
+            fell_behind: false,
+        }
+    }
+
+    /// An occluded window stays occluded until someone moves it, so asking again
+    /// immediately burns a core to draw nothing — 14,000 frames a second,
+    /// measured, before this existed.
+    #[test]
+    fn an_occluded_window_makes_the_loop_wait() {
+        let paced = pacing_for(&report_with(Some(cx_render::SkipReason::Occluded)));
+        assert!(
+            matches!(paced, ControlFlow::WaitUntil(_)),
+            "an occluded frame should schedule a wake-up, got {paced:?}"
+        );
+    }
+
+    /// The transient reasons must *not* back off: a lost or outdated surface has
+    /// just been reconfigured and the next frame is expected to work, so waiting
+    /// would add 16 ms of stutter to every window resize.
+    #[test]
+    fn transient_skips_retry_immediately() {
+        for reason in [
+            cx_render::SkipReason::Lost,
+            cx_render::SkipReason::Outdated,
+            cx_render::SkipReason::Timeout,
+        ] {
+            assert_eq!(
+                pacing_for(&report_with(Some(reason))),
+                ControlFlow::Poll,
+                "{reason:?} should retry at once"
+            );
+            assert!(!reason.is_persistent());
+        }
+        assert!(cx_render::SkipReason::Occluded.is_persistent());
+    }
+
+    #[test]
+    fn a_drawn_frame_keeps_polling() {
+        assert_eq!(pacing_for(&report_with(None)), ControlFlow::Poll);
     }
 }

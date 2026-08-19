@@ -8,13 +8,15 @@
 //!
 //! # Controls
 //!
-//! `Esc` quit · `Space` pause · `.` step one tick · `[` slower · `]` faster ·
-//! `\` normal speed.
+//! Camera: `W`/`A`/`S`/`D` to fly, `E`/`Q` up and down, hold `Shift` to boost,
+//! hold the right mouse button and move the mouse to look.
+//!
+//! Time: `Esc` quit · `Space` pause · `.` step one tick · `[` slower ·
+//! `]` faster · `\` normal speed.
 
-use cx_app::{WindowConfig, run};
+use cx_app::{FlyCamera, WindowConfig, run};
 use cx_core::math::{ChunkCoord, Vec3, WorldPos};
 use cx_ecs::{Phase, PreviousTransform, Query, SimSchedule, SimWorld, Transform, WorldConfig};
-use cx_render::Camera;
 
 /// Cubes per side of the placeholder grid.
 const GRID: i32 = 20;
@@ -102,8 +104,13 @@ fn main() -> anyhow::Result<()> {
 
     let (world, schedule) = build_world();
 
-    // Above and back, looking at the middle of the grid.
-    let camera = Camera::looking_at(Vec3::new(0.0, 28.0, 46.0), Vec3::ZERO);
+    // Above and back, already looking at the middle of the grid, so the first
+    // mouse movement turns from where the view actually points rather than
+    // snapping to level.
+    let camera = FlyCamera::looking_at(
+        WorldPos::new(ChunkCoord::new(0, 0), Vec3::new(0.0, 28.0, 46.0)),
+        centre(),
+    );
 
     let config = WindowConfig {
         title: "Chromatron — M1".to_owned(),
@@ -113,7 +120,7 @@ fn main() -> anyhow::Result<()> {
 
     tracing::info!(
         entities = GRID * GRID,
-        "starting the windowed client; Esc quits, Space pauses, . steps"
+        "starting the windowed client; WASD+QE and right-drag to fly, Space pauses, Esc quits"
     );
 
     run(config, world, schedule, camera)?;

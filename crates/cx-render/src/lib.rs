@@ -40,4 +40,4 @@ pub use error::RenderError;
 pub use instanced::{DrawStats, InstancedRenderer};
 pub use mesh::{MeshData, Vertex};
 pub use offscreen::{Readback, Rgba};
-pub use surface::{WindowSurface, WindowTarget};
+pub use surface::{Presented, SkipReason, WindowSurface, WindowTarget};

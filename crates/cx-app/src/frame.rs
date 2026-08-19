@@ -25,7 +25,8 @@ use cx_core::Fixed;
 use cx_core::math::ChunkCoord;
 use cx_ecs::{SimSchedule, SimWorld};
 use cx_render::{
-    Camera, DrawStats, InstancedRenderer, MeshData, RenderDevice, RenderError, WindowSurface,
+    Camera, DrawStats, InstancedRenderer, MeshData, Presented, RenderDevice, RenderError,
+    SkipReason, WindowSurface,
 };
 use cx_time::{CatchUp, PacedDriver, TickRate, TimeControl};
 use cx_view::{ViewWorld, extract};
@@ -45,6 +46,11 @@ pub struct FrameReport {
     pub extracted: usize,
     /// What the draw cost, when the frame drew.
     pub draw: Option<DrawStats>,
+    /// Why the frame was not drawn, when it was not.
+    ///
+    /// Distinct from `draw: None`, which also means "this was a headless frame
+    /// that never intended to draw".
+    pub skipped: Option<SkipReason>,
     /// Whether simulated time was dropped by the clock's guards.
     pub fell_behind: bool,
 }
@@ -217,14 +223,20 @@ impl FrameLoop {
         real_delta: Fixed,
     ) -> Result<FrameReport, RenderError> {
         let produced = self.advance(world, schedule, real_delta);
-        let stats = surface.present(
+        let presented = surface.present(
             &self.device,
             &self.renderer,
             camera,
             self.view.instances(),
             CLEAR_COLOUR,
         )?;
-        Ok(self.report(produced, Some(stats)))
+
+        let mut report = self.report(produced, None);
+        match presented {
+            Presented::Drawn(stats) => report.draw = Some(stats),
+            Presented::Skipped(reason) => report.skipped = Some(reason),
+        }
+        Ok(report)
     }
 
     /// Creates a surface for `window`, sized in physical pixels.
@@ -283,6 +295,7 @@ impl FrameLoop {
             alpha: self.view.alpha(),
             extracted: self.view.len(),
             draw,
+            skipped: None,
             fell_behind: produced.fell_behind,
         }
     }
