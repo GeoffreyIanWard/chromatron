@@ -13,10 +13,7 @@
 
 use cx_app::{WindowConfig, run};
 use cx_core::math::{ChunkCoord, Vec3, WorldPos};
-use cx_ecs::{
-    Phase, PreviousTransform, Query, SimSchedule, SimWorld, Transform, WorldConfig,
-    copy_previous_transforms,
-};
+use cx_ecs::{Phase, PreviousTransform, Query, SimSchedule, SimWorld, Transform, WorldConfig};
 use cx_render::Camera;
 
 /// Cubes per side of the placeholder grid.
@@ -92,11 +89,8 @@ fn build_world() -> (SimWorld, SimSchedule) {
 
     let mut schedule = SimSchedule::new();
 
-    // First, and it has to be first: everything below moves things, and
-    // interpolation blends from whatever this copied. Registering it later makes
-    // "previous" mean "current" for every entity already moved, which looks
-    // exactly like the stepping interpolation exists to remove.
-    schedule.add_system(Phase::IntakeCommands, copy_previous_transforms);
+    // The previous-transform copy is registered by the schedule itself, at
+    // IntakeCommands, ahead of everything below.
     schedule.add_system(Phase::AgentAct, spin);
     schedule.add_system(Phase::Physics, orbit);
 

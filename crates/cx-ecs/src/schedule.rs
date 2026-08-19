@@ -73,6 +73,21 @@ impl SimSchedule {
         });
         schedule.add_systems(ApplyDeferred.in_set(Phase::StructuralApply));
 
+        // The previous-transform copy is built in, not left to the caller.
+        //
+        // S03 makes it a contract that `PreviousTransform` holds the start-of-tick
+        // value, and every consumer of interpolation depends on it. A schedule
+        // that omits it still runs, still ticks, and still draws — it just
+        // silently interpolates from the current position to itself, which looks
+        // exactly like the stepping interpolation exists to remove. That is a
+        // failure with no error and no test that naturally catches it, so the
+        // schedule registers it rather than documenting that you must.
+        //
+        // Registered directly rather than through `add_system` so it does not
+        // count towards `system_count`, which reports what the *caller* added.
+        schedule
+            .add_systems(crate::transform::copy_previous_transforms.in_set(Phase::IntakeCommands));
+
         schedule.set_executor(MultiThreadedExecutor::default());
 
         Self {
@@ -102,7 +117,11 @@ impl SimSchedule {
         self
     }
 
-    /// How many systems are registered.
+    /// How many systems the caller has registered.
+    ///
+    /// Excludes the schedule's own built-ins (the structural flush and the
+    /// previous-transform copy), so a module registering three systems reports
+    /// three.
     pub const fn system_count(&self) -> usize {
         self.system_count
     }
@@ -254,5 +273,78 @@ mod tests {
             world.resource::<PhaseLog>().expect("inserted").0,
             vec!["seven"]
         );
+    }
+
+    /// The whole reason the copy is built in: a caller who registers only a
+    /// mover must still get working interpolation.
+    ///
+    /// Before this, a schedule that forgot the copy produced
+    /// `previous == current` for every entity, which makes `Transform::interpolate`
+    /// a no-op and shows up only as visibly stepping motion in a window — no
+    /// error, no failing test, and a display server required to notice.
+    #[test]
+    fn the_schedule_copies_previous_transforms_without_being_asked() {
+        use crate::transform::{PreviousTransform, Transform};
+        use cx_core::math::{ChunkCoord, Vec3, WorldPos};
+
+        fn move_east(mut query: Query<&mut Transform>) {
+            for mut transform in query.iter_mut() {
+                transform.position = transform.position.offset(Vec3::new(1.0, 0.0, 0.0));
+            }
+        }
+
+        let start = Transform::from_position(WorldPos::new(ChunkCoord::new(0, 0), Vec3::ZERO));
+
+        let mut world = SimWorld::new(WorldConfig::default());
+        let entity = world.spawn((start, PreviousTransform(start)));
+
+        let mut schedule = SimSchedule::new();
+        schedule.add_system(Phase::AgentAct, move_east);
+
+        // Two ticks, not one. After a single tick the seeded `PreviousTransform`
+        // already equals what the copy would have written, so a one-tick version
+        // of this test passes with the copy removed — it was written that way
+        // first, and it did.
+        schedule.run(&mut world);
+        schedule.run(&mut world);
+
+        let inner = world.inner();
+        let current = *inner
+            .get::<Transform>(entity)
+            .expect("the entity still exists");
+        let previous = inner
+            .get::<PreviousTransform>(entity)
+            .expect("the entity still exists")
+            .0;
+
+        assert!(
+            (current.position.local.x - 2.0).abs() < 1e-6,
+            "two ticks of the mover should reach x=2, got {}",
+            current.position.local.x
+        );
+        assert!(
+            (previous.position.local.x - 1.0).abs() < 1e-6,
+            "previous should hold the start of the *second* tick, x=1, got {}. \
+             x=0 means the copy never ran and interpolation is blending across \
+             two ticks of movement.",
+            previous.position.local.x
+        );
+
+        // And the halfway blend lands between them, which is what every
+        // interpolated frame depends on.
+        let midpoint = previous.interpolate(&current, 0.5);
+        assert!(
+            (midpoint.position.local.x - 1.5).abs() < 1e-6,
+            "halfway between 1 and 2 should be 1.5, got {}",
+            midpoint.position.local.x
+        );
+    }
+
+    /// `system_count` reports what the caller added, not what the schedule
+    /// builds in — otherwise adding a built-in would silently change every
+    /// module's reported size.
+    #[test]
+    fn built_in_systems_do_not_count_as_registered() {
+        assert_eq!(SimSchedule::new().system_count(), 0);
     }
 }

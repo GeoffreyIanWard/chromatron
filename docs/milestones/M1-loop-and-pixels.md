@@ -30,9 +30,9 @@ First frame on screen, and — more importantly — the first proof that the sim
 | 30 Hz sim, 144 Hz render, moving instances | 99th-pct frame time < 8 ms, no visible stutter |
 | Extract 100,000 visible instances | < 2 ms |
 | Debug draw 10,000 lines | < 1 ms |
-| Headless vs windowed state hash, 10,000 ticks | identical |
+| Headless vs windowed state hash, 10,000 ticks | identical — **met** |
 | wgpu types outside `cx-render` | zero, CI enforced |
-| Pause → step 5 → resume vs run 5 continuously | identical state |
+| Pause → step 5 → resume vs run 5 continuously | identical state — **met** |
 
 ## The window, and what it found
 
@@ -156,6 +156,47 @@ and both are catchable on any machine.
 
 That assertion held identically — **62 of 300 frames** — on all four devices, across a 10x
 spread in frame cost. Which is exactly the property a hardware-independent check should have.
+
+## The two state-equivalence criteria are met
+
+Both are the same claim from two directions: **sim state is a function of its
+ticks and nothing else** — not of whether anything is watching, and not of how
+the ticks were requested. Checked in `crates/cx-app/tests/state_equivalence.rs`.
+
+| Criterion | How it is checked |
+|---|---|
+| Headless vs windowed, 10,000 ticks | Both worlds hashed **every tick**, not just at the end. The windowed side runs the full frame loop, extract and draw included, and the test asserts it actually ticked, extracted, and drew each frame — so a run where drawing quietly stopped fails rather than passes. |
+| Pause → step 5 → resume | Driven through `PacedDriver`, which needs no adapter, so it runs everywhere. Each step is followed by an idle paused frame, since that is where a leaked tick would hide. |
+
+Both failure modes are silent, which is why they are worth checking: an extract
+that wrote back to sim state would make a game play differently in a window than
+it replays headless, discovered whenever a replay or save is first compared.
+
+The drawn comparison runs at 32x32 with 64 entities. Resolution is irrelevant to
+whether *drawing at all* perturbs state, and a full-size 10,000-frame run takes
+minutes on the software rasterizers CI uses — small and actually run beats
+realistic and skipped.
+
+A third test is the control: it asserts the hash genuinely distinguishes states,
+including a difference confined to `PreviousTransform` alone. Without it, both
+criteria above would pass against a hash function that returned a constant.
+
+`Transform`, `PreviousTransform`, `WorldPos`, and `Quat` are now `StateHashable`.
+`WorldPos` hashes its chunk and local offset separately rather than an absolute
+position — the absolute value is not representable without precision loss far
+from the origin, which is exactly where a determinism bug is hardest to find.
+
+## The previous-transform copy is now built into the schedule
+
+`SimSchedule::new()` registers `copy_previous_transforms` at `IntakeCommands`
+itself. A schedule that omitted it still ran, still ticked, and still drew — it
+just interpolated from each position to itself, which looks exactly like the
+stepping interpolation exists to remove. No error, no failing test, and a display
+server required to notice it.
+
+The test that covers this runs **two** ticks, not one. Written with a single tick
+it passed with the copy removed, because the seeded `PreviousTransform` already
+equalled what the copy would have written.
 
 ## Known inefficiency in the frame path
 
