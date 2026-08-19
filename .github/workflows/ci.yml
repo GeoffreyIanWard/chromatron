@@ -32,6 +32,10 @@ jobs:
   firewall:
     name: dependency firewall
     runs-on: ubuntu-latest
+    # Every job is bounded. GitHub's default is six hours, which is not a
+    # timeout, it is a licence to burn a runner all afternoon — see the
+    # apt-get hang recorded on the Vulkan step below.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install toolchain
@@ -41,6 +45,7 @@ jobs:
   check:
     name: fmt, clippy, test
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -57,17 +62,36 @@ jobs:
       # not a fast one, and Linux runners have no GPU. Frame *rate* from a
       # software rasterizer is meaningless and is not gated here; see the M1
       # milestone for how that is measured instead.
+      # This step hung for over two hours once, with no output, and nothing
+      # stopped it: `apt-get` was waiting on the runner's own unattended-upgrade
+      # holding the dpkg lock. Three things changed as a result.
+      #
+      # 1. `timeout-minutes`. An install that takes longer than five minutes is
+      #    stuck, and failing then beats burning six hours to learn the same
+      #    thing.
+      # 2. `DEBIAN_FRONTEND=noninteractive` and `-o DPkg::Lock::Timeout`. The
+      #    first stops a debconf prompt waiting for a terminal that will never
+      #    answer; the second makes apt give up on the lock rather than block on
+      #    it forever.
+      # 3. `vulkan-tools` is gone. It was installed only for `vulkaninfo`, and
+      #    the adapter name it reported is already in the log: `frame_cost` and
+      #    `debug_draw` both print the device alongside their measurements, and
+      #    both run with --nocapture in the recording step below. Removing it
+      #    drops a large dependency tree from the critical path of every Linux
+      #    run.
+      #
+      #    If those two tests ever stop printing it, the adapter name leaves the
+      #    log with them — which is the tradeoff being made here deliberately
+      #    rather than by accident.
       - name: Install a software Vulkan adapter
         if: runner.os == 'Linux'
+        timeout-minutes: 5
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq mesa-vulkan-drivers vulkan-tools
-          # Record which adapter the run used. Frame-rate numbers are only
-          # meaningful alongside the hardware that produced them, so the device
-          # name belongs in the log rather than being inferred from the runner
-          # label.
-          vulkaninfo --summary 2>/dev/null | grep -E "deviceName|driverName" \
-            || echo "no Vulkan devices reported; the test step will fail if that is real"
+          set -euo pipefail
+          sudo apt-get -o DPkg::Lock::Timeout=120 update -qq
+          sudo apt-get -o DPkg::Lock::Timeout=120 install -y -qq mesa-vulkan-drivers
 
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets
@@ -80,15 +104,21 @@ jobs:
           CX_REQUIRE_GPU: '1'
         run: cargo test --workspace
 
-      # Numbers that are recorded rather than gated — frame cost, adapter names —
-      # are printed by tests that pass, and cargo swallows a passing test's
-      # output. Re-running them with --nocapture is what actually puts them in
-      # the log; without this the "recording" records nothing.
+      # Numbers that are recorded rather than gated — frame cost, debug-draw
+      # cost, adapter names — are printed by tests that pass, and cargo swallows
+      # a passing test's output. Re-running them with --nocapture is what
+      # actually puts them in the log; without this the "recording" records
+      # nothing.
+      #
+      # Every test that prints a measurement must be listed here. `debug_draw`
+      # was added to the suite with a measurement nobody would ever have seen,
+      # which is the same trap this step exists to close.
       - name: Record hardware-dependent measurements
         env:
           CX_REQUIRE_GPU: '1'
         run: |
           cargo test -p cx-app --test frame_cost -- --nocapture
+          cargo test -p cx-app --test debug_draw -- --nocapture
           cargo test -p cx-render --test draw_calls -- --nocapture
 
   # Gates-first: these compile and run only once their crate's feature is
@@ -98,6 +128,7 @@ jobs:
   gates:
     name: m0 gates
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install toolchain
