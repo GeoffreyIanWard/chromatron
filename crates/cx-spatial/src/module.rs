@@ -84,12 +84,19 @@ impl Module for SpatialModule {
     }
 
     fn register(registrar: &mut Registrar) {
-        registrar.system(Phase::SpatialRebuild, "rebuild_spatial_index", rebuild);
+        registrar.system(
+            Phase::SpatialRebuild,
+            "rebuild_spatial_index",
+            rebuild_index,
+        );
     }
 }
 
 /// Rebuilds the agent index from current positions.
-fn rebuild(mut index: ResMut<SpatialIndex>, query: Query<(Entity, &Transform)>) {
+///
+/// Public so that a test or a caller assembling its own schedule can register
+/// the same system the module does, rather than a copy of it that drifts.
+pub fn rebuild_index(mut index: ResMut<SpatialIndex>, query: Query<(Entity, &Transform)>) {
     // Collected before rebuilding rather than streamed, because `rebuild` takes
     // an iterator and the borrow checker will not have the query alive across a
     // `&mut self` call on the resource. The vector is the one allocation on this
@@ -121,7 +128,7 @@ mod tests {
         world.insert_resource(SpatialIndex::default());
 
         let mut schedule = SimSchedule::new();
-        schedule.add_system(Phase::SpatialRebuild, rebuild);
+        schedule.add_system(Phase::SpatialRebuild, rebuild_index);
 
         (world, schedule)
     }

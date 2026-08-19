@@ -7,15 +7,19 @@
 //!
 //! # Why most of these are still thin
 //!
-//! `cx-fields`, `cx-worldgen`, and `cx-spatial` are modules; the solvers,
-//! agents, and physics register nothing yet. Each fills in as its crate becomes
+//! `cx-fields`, `cx-worldgen`, `cx-spatial`, and `cx-agents` are modules; the
+//! solvers and physics register nothing yet. Each fills in as its crate becomes
 //! a module, and the profile names exist now so that the CLI, the gates, and
 //! S20's profile rule have a stable surface to build against.
 //!
-//! `spatial` is in `full-sim` and `game` but not in `terrain` or `hydro`: an
-//! index over sparse entities is worth nothing in a profile with no agents, and
-//! a profile that carries a module it cannot use is a profile whose name has
-//! stopped describing it.
+//! `spatial` and `agents` are in `full-sim` and `game` but not in `terrain` or
+//! `hydro`: an index over sparse entities is worth nothing in a profile with no
+//! agents, and a profile that carries a module it cannot use is a profile whose
+//! name has stopped describing it.
+//!
+//! They also go in together. `agents` *requires* `spatial_index`, so a profile
+//! with one and not the other does not resolve at all — which is the module
+//! system doing its job rather than a constraint to work around.
 //!
 //! A profile that is thinner than its documentation is worth having anyway: the
 //! *mechanism* is what M0 needed to prove, and a named set that resolves, hashes,
@@ -24,6 +28,7 @@
 //! them, and a field with an owner and a declared writer, which is the first
 //! graph with anything to look at.
 
+use cx_agents::AgentsModule;
 use cx_fields::FieldsModule;
 use cx_module::Profile;
 use cx_spatial::SpatialModule;
@@ -56,6 +61,7 @@ pub fn full_sim() -> Profile {
         .with::<FieldsModule>()
         .with::<WorldgenModule>()
         .with::<SpatialModule>()
+        .with::<AgentsModule>()
 }
 
 /// `full-sim` minus the erosion generation stage (S20).
@@ -68,6 +74,7 @@ pub fn no_erosion() -> Profile {
         .with::<FieldsModule>()
         .with::<WorldgenModule>()
         .with::<SpatialModule>()
+        .with::<AgentsModule>()
 }
 
 /// Everything, including presentation (S20).
@@ -76,6 +83,7 @@ pub fn game() -> Profile {
         .with::<FieldsModule>()
         .with::<WorldgenModule>()
         .with::<SpatialModule>()
+        .with::<AgentsModule>()
 }
 
 /// A profile by name, or `None` if unknown.

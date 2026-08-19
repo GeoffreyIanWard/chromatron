@@ -860,6 +860,13 @@ checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 [[package]]
 name = "cx-agents"
 version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "cx-core",
+ "cx-ecs",
+ "cx-module",
+ "cx-spatial",
+]
 
 [[package]]
 name = "cx-app"
@@ -976,6 +983,7 @@ dependencies = [
 name = "cx-sim"
 version = "0.1.0"
 dependencies = [
+ "cx-agents",
  "cx-core",
  "cx-diag",
  "cx-ecs",

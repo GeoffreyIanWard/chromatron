@@ -155,44 +155,45 @@ impl SpatialGrid {
         }
     }
 
-    /// Every entity within `radius` of `centre`, nearest first.
+    /// Every entity within `radius` of `centre`, nearest first, written into
+    /// `out`.
     ///
     /// Ordered by distance, then by entity as a tiebreak — S05's determinism
     /// criterion. Two entities at exactly the same distance are common (a grid
     /// formation, a stack of items), so the tiebreak is not a theoretical case.
     ///
-    /// Returns a borrowed slice from a reused buffer, so a caller looping over
-    /// queries allocates nothing.
-    pub fn within_radius(&mut self, centre: WorldPos, radius: f32) -> &[Found] {
-        // Cells the radius can reach, and where the centre sits. Both computed
-        // before the fields are split apart below.
-        let reach = (radius / self.cell_size).ceil() as i32;
-        let origin = self.cell_of(centre);
-
-        // Destructured so the entry list can be read while the result buffer is
-        // written. Borrowing `self` for both at once is what the alternative
-        // needs, and it is genuinely two disjoint fields.
-        let Self {
-            entries, scratch, ..
-        } = self;
-
-        scratch.clear();
+    /// # Why the caller supplies the buffer
+    ///
+    /// Takes `&self`, so any number of threads can query at once. The earlier
+    /// version owned a scratch buffer and therefore took `&mut self`, which
+    /// meant a sensing system needed `ResMut<SpatialIndex>` and could not run in
+    /// parallel with anything — the exact opposite of what S05 and S10 both
+    /// require of sensing.
+    ///
+    /// A caller that keeps its buffer between calls still allocates nothing;
+    /// it just owns the buffer rather than the index owning it.
+    pub fn within_radius_into(&self, centre: WorldPos, radius: f32, out: &mut Vec<Found>) {
+        out.clear();
 
         if radius <= 0.0 || !radius.is_finite() {
-            return scratch;
+            return;
         }
 
+        // Cells the radius can reach. Computed from the centre's cell rather
+        // than from the corners of the bounding box, so it is symmetric.
+        let reach = (radius / self.cell_size).ceil() as i32;
+        let origin = self.cell_of(centre);
         let radius_squared = radius * radius;
 
         // Ascending cell order, matching how entries are sorted, so the runs
         // this visits are in the same order they appear in memory.
         for z in (origin.z - reach)..=(origin.z + reach) {
             for x in (origin.x - reach)..=(origin.x + reach) {
-                for entry in cell_entries(entries, GridCell { x, z }) {
+                for entry in cell_entries(&self.entries, GridCell { x, z }) {
                     let offset = entry.position.delta(centre);
                     let distance_squared = offset.length_squared();
                     if distance_squared <= radius_squared {
-                        scratch.push(Found {
+                        out.push(Found {
                             entity: entry.entity,
                             position: entry.position,
                             distance: distance_squared.sqrt(),
@@ -202,8 +203,21 @@ impl SpatialGrid {
             }
         }
 
-        sort_by_distance(scratch);
-        scratch
+        sort_by_distance(out);
+    }
+
+    /// [`SpatialGrid::within_radius_into`], using the index's own buffer.
+    ///
+    /// For single-threaded callers and tests. A system that wants to sense in
+    /// parallel must own its buffer and use `within_radius_into`.
+    pub fn within_radius(&mut self, centre: WorldPos, radius: f32) -> &[Found] {
+        // Swapped out and back so the buffer can be filled through `&self`.
+        // Taking it by value for the duration is what lets the same code serve
+        // both the borrowed and the owned case.
+        let mut scratch = std::mem::take(&mut self.scratch);
+        self.within_radius_into(centre, radius, &mut scratch);
+        self.scratch = scratch;
+        &self.scratch
     }
 
     /// The `k` nearest entities to `centre` within `radius`, nearest first.
@@ -569,5 +583,76 @@ mod tests {
             "an entity 100 m above should be out of a 10 m radius"
         );
         assert_eq!(grid.within_radius(at(0.0, 0.0, 0.0), 150.0).len(), 1);
+    }
+
+    #[test]
+    fn a_shared_reference_is_enough_to_query() {
+        // The property S10's sensing needs: many systems querying at once. The
+        // first version of this API took `&mut self`, which meant a sensing
+        // system needed ResMut and could not run in parallel with anything.
+        let ids = entities(3);
+        let mut grid = SpatialGrid::new(4.0);
+        grid.rebuild([
+            (ids[0], at(0.0, 0.0, 0.0)),
+            (ids[1], at(1.0, 0.0, 0.0)),
+            (ids[2], at(80.0, 0.0, 0.0)),
+        ]);
+
+        let shared: &SpatialGrid = &grid;
+        let mut first = Vec::new();
+        let mut second = Vec::new();
+
+        // Two buffers filled from one shared borrow, which is what a parallel
+        // sense phase does.
+        shared.within_radius_into(at(0.0, 0.0, 0.0), 5.0, &mut first);
+        shared.within_radius_into(at(80.0, 0.0, 0.0), 5.0, &mut second);
+
+        assert_eq!(first.len(), 2);
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].entity, ids[2]);
+    }
+
+    #[test]
+    fn both_query_forms_agree() {
+        // The borrowing convenience and the parallel-safe form must not drift:
+        // one is implemented in terms of the other, and a future change that
+        // splits them would be silent.
+        let ids = entities(40);
+        let mut grid = SpatialGrid::new(4.0);
+        grid.rebuild(ids.iter().enumerate().map(|(index, entity)| {
+            (
+                *entity,
+                at(index as f32 * 1.7, 0.0, (index % 5) as f32 * 2.0),
+            )
+        }));
+
+        let mut owned = Vec::new();
+        grid.within_radius_into(at(20.0, 0.0, 4.0), 15.0, &mut owned);
+        let borrowed = grid.within_radius(at(20.0, 0.0, 4.0), 15.0);
+
+        assert!(!owned.is_empty());
+        assert_eq!(owned.as_slice(), borrowed);
+    }
+
+    #[test]
+    fn a_caller_owned_buffer_is_reused_rather_than_regrown() {
+        let ids = entities(100);
+        let mut grid = SpatialGrid::new(4.0);
+        grid.rebuild(
+            ids.iter()
+                .enumerate()
+                .map(|(index, entity)| (*entity, at(index as f32 * 0.5, 0.0, 0.0))),
+        );
+
+        let mut buffer = Vec::new();
+        for _ in 0..3 {
+            grid.within_radius_into(at(25.0, 0.0, 0.0), 20.0, &mut buffer);
+        }
+        let capacity = buffer.capacity();
+
+        for _ in 0..20 {
+            grid.within_radius_into(at(25.0, 0.0, 0.0), 20.0, &mut buffer);
+        }
+        assert_eq!(buffer.capacity(), capacity);
     }
 }

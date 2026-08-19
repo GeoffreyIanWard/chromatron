@@ -34,4 +34,4 @@ pub mod grid;
 pub mod module;
 
 pub use grid::{Found, GridCell, SpatialGrid};
-pub use module::{SpatialIndex, SpatialModule};
+pub use module::{SpatialIndex, SpatialModule, rebuild_index};
