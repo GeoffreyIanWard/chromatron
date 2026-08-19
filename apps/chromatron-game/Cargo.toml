@@ -9,6 +9,9 @@ publish.workspace = true
 
 [dependencies]
 cx-app.workspace = true
+cx-core.workspace = true
+cx-ecs.workspace = true
+cx-render.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

@@ -42,6 +42,6 @@ pub mod driver;
 pub mod error;
 
 pub use clock::{CatchUp, MAX_CATCHUP, MAX_FRAME_DELTA_US, TickClock, TickRate};
-pub use control::TimeControl;
+pub use control::{MAX_MULTIPLIER, MIN_MULTIPLIER, TimeControl};
 pub use driver::{HeadlessDriver, PacedDriver, RunReport, StopReason};
 pub use error::TimeError;

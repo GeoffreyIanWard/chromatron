@@ -111,6 +111,33 @@ pub struct DrawStats {
     pub instances: u32,
 }
 
+/// Everything one draw needs.
+///
+/// A struct rather than a long argument list, because the offscreen and
+/// windowed paths both call this and eleven positional parameters is a
+/// swap-two-of-them-and-nobody-notices waiting to happen.
+pub(crate) struct DrawCall<'a> {
+    /// The pipeline built for `target`'s format. Passing one built for a
+    /// different format is a fatal validation error, not a wrong colour.
+    pub pipeline: &'a wgpu::RenderPipeline,
+    /// Colour attachment to draw into.
+    pub target: &'a wgpu::TextureView,
+    /// Depth attachment, which must match `target`'s dimensions.
+    pub depth: &'a wgpu::TextureView,
+    /// Target width, for the projection's aspect ratio.
+    pub width: u32,
+    /// Target height.
+    pub height: u32,
+    /// The view to draw from.
+    pub camera: &'a Camera,
+    /// Per-instance model matrices, already uploaded.
+    pub instance_buffer: &'a wgpu::Buffer,
+    /// How many instances to draw.
+    pub instance_count: u32,
+    /// Colour to clear to first.
+    pub clear: Rgba,
+}
+
 /// Draws instanced meshes to an offscreen target.
 ///
 /// Holds the pipeline and the mesh buffers, which are built once. Rebuilding a
@@ -118,7 +145,13 @@ pub struct DrawStats {
 /// validation, so the split between "build once" and "draw many" is the point of
 /// the type.
 pub struct InstancedRenderer {
+    // The offscreen pipeline. A pipeline is bound to one colour format, and a
+    // window's format is not knowable until a window exists — macOS hands out
+    // `Bgra8UnormSrgb` where the offscreen target is `Rgba8UnormSrgb` — so the
+    // shader and layout are kept to build more on demand.
     pipeline: wgpu::RenderPipeline,
+    shader: wgpu::ShaderModule,
+    pipeline_layout: wgpu::PipelineLayout,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     index_count: u32,
@@ -132,6 +165,73 @@ impl std::fmt::Debug for InstancedRenderer {
             .field("index_count", &self.index_count)
             .finish_non_exhaustive()
     }
+}
+
+/// An offscreen target to draw into.
+pub(crate) struct OffscreenTarget {
+    /// Target width in pixels.
+    pub width: u32,
+    /// Target height in pixels.
+    pub height: u32,
+    /// Colour format. Normally [`crate::offscreen::TARGET_FORMAT`]; a surface's
+    /// format when checking the windowed path without a window.
+    pub format: wgpu::TextureFormat,
+}
+
+/// Builds the draw pipeline for one colour format.
+///
+/// A pipeline is bound to the format of the target it draws into: using an
+/// `Rgba8UnormSrgb` pipeline against a `Bgra8UnormSrgb` swapchain is a
+/// validation error, and wgpu treats those as fatal. Offscreen targets and
+/// window surfaces therefore get their own, from this one description.
+fn build_pipeline(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    pipeline_layout: &wgpu::PipelineLayout,
+    format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("cx-render instanced pipeline"),
+        layout: Some(pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_main"),
+            buffers: &[Some(Vertex::LAYOUT), Some(InstanceRaw::LAYOUT)],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            // Culling back faces halves the fragment work on closed
+            // geometry, and `03-conventions.md` fixes the winding that makes
+            // it safe to switch on.
+            cull_mode: Some(wgpu::Face::Back),
+            polygon_mode: wgpu::PolygonMode::Fill,
+            unclipped_depth: false,
+            conservative: false,
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Less),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
 }
 
 impl InstancedRenderer {
@@ -196,56 +296,133 @@ impl InstancedRenderer {
             ..wgpu::PipelineLayoutDescriptor::default()
         });
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("cx-render instanced pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[Some(Vertex::LAYOUT), Some(InstanceRaw::LAYOUT)],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: crate::offscreen::TARGET_FORMAT,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                // Culling back faces halves the fragment work on closed
-                // geometry, and `03-conventions.md` fixes the winding that makes
-                // it safe to switch on.
-                cull_mode: Some(wgpu::Face::Back),
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let pipeline = build_pipeline(
+            device,
+            &shader,
+            &pipeline_layout,
+            crate::offscreen::TARGET_FORMAT,
+        );
 
         Ok(Self {
             pipeline,
+            shader,
+            pipeline_layout,
             vertex_buffer,
             index_buffer,
             index_count: mesh.indices.len() as u32,
             camera_buffer,
             camera_bind_group,
+        })
+    }
+
+    /// A pipeline for a target of `format`, for callers that do not draw
+    /// offscreen.
+    pub(crate) fn pipeline_for(
+        &self,
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+    ) -> wgpu::RenderPipeline {
+        build_pipeline(device, &self.shader, &self.pipeline_layout, format)
+    }
+
+    /// Encodes a draw into `encoder`, targeting an existing view.
+    ///
+    /// The core of every draw path. An offscreen render and a windowed present
+    /// differ only in where the view came from — a texture this crate created,
+    /// or a swapchain frame the window handed over — so they share this and
+    /// nothing else needs duplicating.
+    pub(crate) fn encode_draw(
+        &self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        call: DrawCall<'_>,
+    ) -> DrawStats {
+        let DrawCall {
+            pipeline,
+            target,
+            depth,
+            width,
+            height,
+            camera,
+            instance_buffer,
+            instance_count,
+            clear,
+        } = call;
+
+        let uniform = CameraUniform {
+            view_projection: camera
+                .view_projection(width as f32 / height as f32)
+                .to_cols_array_2d(),
+        };
+        queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
+
+        let mut draw_calls = 0;
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("cx-render instanced pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: f64::from(clear[0]),
+                            g: f64::from(clear[1]),
+                            b: f64::from(clear[2]),
+                            a: f64::from(clear[3]),
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..wgpu::RenderPassDescriptor::default()
+            });
+
+            if instance_count > 0 {
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+                pass.set_vertex_buffer(1, instance_buffer.slice(..));
+                pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+                pass.draw_indexed(0..self.index_count, 0, 0..instance_count);
+                draw_calls = 1;
+            }
+        }
+
+        DrawStats {
+            draw_calls,
+            instances: instance_count,
+        }
+    }
+
+    /// Uploads instances to a fresh buffer.
+    ///
+    /// An empty buffer is invalid, and drawing zero instances is a legitimate
+    /// frame — an off-screen camera, or a world not yet populated. One zeroed
+    /// entry keeps the buffer valid; the draw asks for zero instances anyway.
+    pub(crate) fn upload_instances(
+        &self,
+        device: &wgpu::Device,
+        instances: &[ExtractedInstance],
+    ) -> wgpu::Buffer {
+        let raw: Vec<InstanceRaw> = instances.iter().map(InstanceRaw::from_extracted).collect();
+        let bytes: &[u8] = if raw.is_empty() {
+            &[0u8; size_of::<InstanceRaw>()]
+        } else {
+            bytemuck::cast_slice(&raw)
+        };
+
+        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("cx-render instances"),
+            contents: bytes,
+            usage: wgpu::BufferUsages::VERTEX,
         })
     }
 
@@ -261,6 +438,41 @@ impl InstancedRenderer {
         instances: &[ExtractedInstance],
         clear: Rgba,
     ) -> Result<(Readback, DrawStats), RenderError> {
+        self.render_to_format(
+            render_device,
+            OffscreenTarget {
+                width,
+                height,
+                format: crate::offscreen::TARGET_FORMAT,
+            },
+            camera,
+            instances,
+            clear,
+        )
+    }
+
+    /// [`InstancedRenderer::render`], into a target of a chosen colour format.
+    ///
+    /// Exists so the *windowed* path can be checked without a window. A surface
+    /// picks its own format — macOS presents `Bgra8UnormSrgb` where the offscreen
+    /// target is `Rgba8UnormSrgb` — and a pipeline built for the wrong one is a
+    /// fatal validation error rather than a wrong colour. Drawing to that format
+    /// offscreen exercises the same pipeline against the same format, on a
+    /// machine with no display server.
+    pub(crate) fn render_to_format(
+        &self,
+        render_device: &RenderDevice,
+        target: OffscreenTarget,
+        camera: &Camera,
+        instances: &[ExtractedInstance],
+        clear: Rgba,
+    ) -> Result<(Readback, DrawStats), RenderError> {
+        let OffscreenTarget {
+            width,
+            height,
+            format,
+        } = target;
+
         if width == 0 || height == 0 {
             return Err(RenderError::InvalidTargetSize { width, height });
         }
@@ -268,75 +480,39 @@ impl InstancedRenderer {
         let device = render_device.wgpu_device();
         let queue = render_device.wgpu_queue();
 
-        let uniform = CameraUniform {
-            view_projection: camera
-                .view_projection(width as f32 / height as f32)
-                .to_cols_array_2d(),
-        };
-        queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
+        let instance_buffer = self.upload_instances(device, instances);
+        let (colour_texture, colour_view) = create_colour_target(device, width, height, format);
 
-        let raw: Vec<InstanceRaw> = instances.iter().map(InstanceRaw::from_extracted).collect();
-        // An empty buffer is invalid, and drawing zero instances is a legitimate
-        // frame — an off-screen camera, or a world not yet populated. One dummy
-        // entry keeps the buffer valid; the draw asks for zero instances anyway.
-        let instance_bytes: &[u8] = if raw.is_empty() {
-            &[0u8; size_of::<InstanceRaw>()]
+        // Reuse the offscreen pipeline when the format matches, rather than
+        // rebuilding one per call: this is also the normal render path.
+        let built;
+        let pipeline = if format == crate::offscreen::TARGET_FORMAT {
+            &self.pipeline
         } else {
-            bytemuck::cast_slice(&raw)
+            built = self.pipeline_for(device, format);
+            &built
         };
-
-        let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("cx-render instances"),
-            contents: instance_bytes,
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        let (colour_texture, colour_view) = create_colour_target(device, width, height);
         let depth_view = create_depth_target(device, width, height);
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("cx-render instanced draw"),
         });
 
-        let mut draw_calls = 0;
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("cx-render instanced pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &colour_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: f64::from(clear[0]),
-                            g: f64::from(clear[1]),
-                            b: f64::from(clear[2]),
-                            a: f64::from(clear[3]),
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &depth_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Discard,
-                    }),
-                    stencil_ops: None,
-                }),
-                ..wgpu::RenderPassDescriptor::default()
-            });
-
-            if !instances.is_empty() {
-                pass.set_pipeline(&self.pipeline);
-                pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-                pass.set_vertex_buffer(1, instance_buffer.slice(..));
-                pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-                pass.draw_indexed(0..self.index_count, 0, 0..instances.len() as u32);
-                draw_calls = 1;
-            }
-        }
+        let stats = self.encode_draw(
+            queue,
+            &mut encoder,
+            DrawCall {
+                pipeline,
+                target: &colour_view,
+                depth: &depth_view,
+                width,
+                height,
+                camera,
+                instance_buffer: &instance_buffer,
+                instance_count: instances.len() as u32,
+                clear,
+            },
+        );
 
         let readback = crate::offscreen::copy_texture_to_readback(
             device,
@@ -347,13 +523,7 @@ impl InstancedRenderer {
             height,
         )?;
 
-        Ok((
-            readback,
-            DrawStats {
-                draw_calls,
-                instances: instances.len() as u32,
-            },
-        ))
+        Ok((readback, stats))
     }
 }
 
@@ -361,6 +531,7 @@ fn create_colour_target(
     device: &wgpu::Device,
     width: u32,
     height: u32,
+    format: wgpu::TextureFormat,
 ) -> (wgpu::Texture, wgpu::TextureView) {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("cx-render colour target"),
@@ -372,7 +543,7 @@ fn create_colour_target(
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: crate::offscreen::TARGET_FORMAT,
+        format,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
@@ -380,7 +551,11 @@ fn create_colour_target(
     (texture, view)
 }
 
-fn create_depth_target(device: &wgpu::Device, width: u32, height: u32) -> wgpu::TextureView {
+pub(crate) fn create_depth_target(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+) -> wgpu::TextureView {
     device
         .create_texture(&wgpu::TextureDescriptor {
             label: Some("cx-render depth target"),

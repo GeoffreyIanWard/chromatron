@@ -13,7 +13,7 @@ First frame on screen, and — more importantly — the first proof that the sim
 
 - `cx-render` using wgpu directly, with the crate boundary enforced by CI (S12, `ADR-0010`).
 - `cx-view`: view world, extract phase, `Transform`/`PreviousTransform` interpolation.
-- `WindowedDriver` with frame pacing, spiral-of-death guard, pause/step/speed controls (S03).
+- ~~`WindowedDriver`~~ **done** — `cx-app`'s windowed driver, with frame pacing, spiral-of-death guard, and pause/step/speed controls (S03).
 - Instanced indirect draw path with a hand-authored palette atlas (the full asset pipeline is M3).
 - GPU frustum culling compute pass.
 - Debug draw: lines, spheres, AABBs, arrows, world-space text.
@@ -33,6 +33,46 @@ First frame on screen, and — more importantly — the first proof that the sim
 | Headless vs windowed state hash, 10,000 ticks | identical |
 | wgpu types outside `cx-render` | zero, CI enforced |
 | Pause → step 5 → resume vs run 5 continuously | identical state |
+
+## The window, and what it found
+
+Measured on the developer machine (Apple M4 Pro, Metal), 400 instances at
+2560x1440:
+
+| | |
+|---|---|
+| Render rate | **120 fps**, vsync-locked (`Fifo`) |
+| Sim rate | **exactly 30 ticks/second**, held over minutes |
+| Draw calls | **1** |
+
+So the milestone's headline criterion — a 30 Hz simulation drawn at the display's
+rate — is demonstrated, at 4 render frames per tick.
+
+**Everything testable landed before the window did, and the window still found two
+bugs neither offscreen tests nor CI could have.** Both were fatal, and both were
+about the difference between a texture you allocate and a surface someone else
+hands you:
+
+1. **The device asked for a texture limit smaller than a window.**
+   `Limits::downlevel_defaults()` caps textures at 2048; a 1280x720 window on a 2x
+   display is a 2560x1440 surface. Configuring it was a validation error. The device
+   now takes its *resolution* limits from the adapter (`using_resolution`) while
+   keeping downlevel defaults for everything else, so no adapter is excluded.
+2. **The pipeline was built for the wrong colour format.** The offscreen target is
+   `Rgba8UnormSrgb`; macOS presents `Bgra8UnormSrgb`. A pipeline is bound to one
+   format, and the mismatch is a validation error. Surfaces now build their own
+   pipeline for whatever format they get.
+
+**wgpu treats validation errors as fatal**, so neither returned an `Err` to handle —
+they aborted the process from inside a windowing callback, with a panic that could
+not even unwind. That is worth recording as a property of the library: on the
+render path, "handle the error" is often not available, and the check has to happen
+*before* the call.
+
+Both now have hardware-independent regression tests that run in CI: the size clamp
+is a pure function, and the format bug is caught by drawing to a surface's format
+*offscreen* — same pipeline, same format, no display server. Each was confirmed to
+fail against the original code before being kept.
 
 ## Measured so far
 

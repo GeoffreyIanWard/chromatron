@@ -151,6 +151,11 @@ pub struct RenderDevice {
     device: wgpu::Device,
     queue: wgpu::Queue,
     info: DeviceInfo,
+    // Kept so a surface can be created later, when a window exists. Acquiring
+    // the device does not require one — that is what makes headless rendering
+    // and therefore CI testing possible — but presenting does.
+    instance: wgpu::Instance,
+    adapter: wgpu::Adapter,
 }
 
 impl fmt::Debug for RenderDevice {
@@ -196,7 +201,14 @@ impl RenderDevice {
             // Downlevel defaults rather than the highest available: the M1 draw
             // path is instanced low-poly geometry, and asking for more than that
             // needs would exclude the software adapters CI depends on.
-            required_limits: wgpu::Limits::downlevel_defaults(),
+            //
+            // *Except* resolution, which is taken from the adapter. Downlevel
+            // caps textures at 2048, and a 1280x720 window on a 2x display is a
+            // 2560x1440 surface — configuring it aborted the process the first
+            // time a real window opened. Resolution is the one downlevel limit a
+            // window can exceed just by existing, and raising it excludes no
+            // adapter, because it is the adapter's own number.
+            required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
             memory_hints: wgpu::MemoryHints::Performance,
             trace: wgpu::Trace::Off,
             ..wgpu::DeviceDescriptor::default()
@@ -224,7 +236,19 @@ impl RenderDevice {
             device,
             queue,
             info,
+            instance,
+            adapter,
         })
+    }
+
+    /// The largest 2D texture this device will accept, per side.
+    ///
+    /// Public because it bounds what a *caller* may ask for: a surface larger
+    /// than this is a validation error, and wgpu treats validation errors as
+    /// fatal, so it has to be caught before it is requested rather than handled
+    /// after.
+    pub fn max_texture_dimension(&self) -> u32 {
+        self.device.limits().max_texture_dimension_2d
     }
 
     /// What was acquired.
@@ -240,6 +264,16 @@ impl RenderDevice {
     /// The `wgpu` queue, for use *within this crate only*.
     pub(crate) const fn wgpu_queue(&self) -> &wgpu::Queue {
         &self.queue
+    }
+
+    /// The `wgpu` instance, for use *within this crate only*.
+    pub(crate) const fn wgpu_instance(&self) -> &wgpu::Instance {
+        &self.instance
+    }
+
+    /// The `wgpu` adapter, for use *within this crate only*.
+    pub(crate) const fn wgpu_adapter(&self) -> &wgpu::Adapter {
+        &self.adapter
     }
 
     /// Submits any pending work and waits for the GPU to finish.
@@ -269,6 +303,11 @@ mod tests {
                     "an acquired device must report a name"
                 );
                 assert!(!info.summary().is_empty());
+                assert!(
+                    device.max_texture_dimension() >= 2_048,
+                    "downlevel defaults guarantee at least 2048; got {}",
+                    device.max_texture_dimension()
+                );
                 device.wait_for_idle();
                 println!("acquired: {}", info.summary());
             }

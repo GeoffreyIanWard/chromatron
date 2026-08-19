@@ -12,6 +12,12 @@ cx-ecs.workspace = true
 cx-time.workspace = true
 cx-render.workspace = true
 cx-view.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+# The windowing library. 02-architecture.md gives it exactly one home, the same
+# way wgpu lives only in cx-render; tools/ci-checks enforces both.
+winit.workspace = true
 
 # Below the firewall: the strict sim lint set does not apply here.
 # See the workspace manifest and 03-conventions.md.
