@@ -26,8 +26,10 @@
 //! being handled.
 
 pub mod camera;
+pub mod debug;
 pub mod device;
 pub mod error;
+pub mod frame;
 pub mod instanced;
 pub mod mesh;
 pub mod offscreen;
@@ -35,8 +37,10 @@ pub mod surface;
 pub mod testing;
 
 pub use camera::Camera;
+pub use debug::{DebugRenderer, DebugStats};
 pub use device::{Backend, DeviceInfo, DeviceKind, RenderDevice};
 pub use error::RenderError;
+pub use frame::{FrameContents, FrameRenderer};
 pub use instanced::{DrawStats, InstancedRenderer};
 pub use mesh::{MeshData, Vertex};
 pub use offscreen::{Readback, Rgba};

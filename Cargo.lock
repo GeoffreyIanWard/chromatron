@@ -589,6 +589,7 @@ dependencies = [
  "cx-core",
  "cx-ecs",
  "cx-render",
+ "cx-view",
  "tracing",
  "tracing-subscriber",
 ]
@@ -989,6 +990,7 @@ version = "0.1.0"
 name = "cx-view"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "cx-core",
  "cx-ecs",
 ]

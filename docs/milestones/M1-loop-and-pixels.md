@@ -16,7 +16,7 @@ First frame on screen, and — more importantly — the first proof that the sim
 - ~~`WindowedDriver`~~ **done** — `cx-app`'s windowed driver, with frame pacing, spiral-of-death guard, and pause/step/speed controls (S03).
 - Instanced indirect draw path with a hand-authored palette atlas (the full asset pipeline is M3).
 - GPU frustum culling compute pass.
-- Debug draw: lines, spheres, AABBs, arrows, world-space text.
+- **Debug draw** — lines, spheres, AABBs, OBBs, arrows, crosses: **done**. World-space text lands with the egui overlay, which is where a glyph atlas already exists.
 - egui overlay with tick counter, frame graph, and time controls.
 - ~~Free-fly camera~~ **done** — `cx-app::flycam`, with the floating origin following it.
 - `tools/graph-viewer`: the isometric architecture viewer over the M0 graph export, with stable layout and `--baseline` diff (S21). Independent of the renderer above — it is a static page, not engine code — but it lands here because M1 is the first milestone with enough modules and systems registered for the diagram to be worth looking at.
@@ -29,7 +29,7 @@ First frame on screen, and — more importantly — the first proof that the sim
 | 100,000 instanced meshes at 60 fps | < 20 draw calls |
 | 30 Hz sim, 144 Hz render, moving instances | 99th-pct frame time < 8 ms, no visible stutter |
 | Extract 100,000 visible instances | < 2 ms |
-| Debug draw 10,000 lines | < 1 ms |
+| Debug draw 10,000 lines | < 1 ms — **measured 1.02 ms**, see below |
 | Headless vs windowed state hash, 10,000 ticks | identical — **met** |
 | wgpu types outside `cx-render` | zero, CI enforced |
 | Pause → step 5 → resume vs run 5 continuously | identical state — **met** |
@@ -282,6 +282,44 @@ A viewer built against a one-node graph would be honest and useless, and worse,
 its layout and diff decisions would be made against a shape that tells us nothing
 about how they behave at fifty nodes. The dependency is real: the viewer should
 follow the modules, not lead them.
+
+## Debug draw, and the budget it lands right on top of
+
+Everything is line segments: a sphere is three rings, a box twelve edges, an
+arrow a shaft and four barbs. One primitive, one pipeline, one number to
+measure. Shapes are authored in `WorldPos` and rebased with the frame, like
+instances, so nothing has to know the current origin.
+
+**Marginal cost of 10,000 lines on an Apple M4 Pro: 1.02 ms** — 1.48 ms with the
+lines against 0.46 ms without, at 640x360. The budget is 1 ms. That is *on* the
+line, not under it.
+
+Measured as a difference rather than as a whole frame deliberately: reporting the
+frame would have credited debug draw with the simulation, the extract, and the
+scene pass, and produced a comfortable-looking number that answered a different
+question.
+
+The obvious cost is already known and already recorded below — the vertex buffer
+is created and uploaded every frame. Pooling it is the same work that the
+instance buffer needs, and this is now a second reason to do it.
+
+Not gated in CI, for the reason set out above: submit backpressure puts the GPU's
+cost into any wall-clock frame measurement, and the runners' software
+rasterizers vary 5x run to run. What *is* asserted on every platform is
+hardware-independent — 10,000 lines cost exactly **one** draw call, and all
+10,000 arrive.
+
+### What drawing it found
+
+The scene pass discarded its depth buffer (`StoreOp::Discard`), which was correct
+while nothing read depth afterwards. The debug pass then started to, loaded
+undefined contents, and **every line silently failed its depth test**: no error,
+no validation warning, one draw call reported, zero pixels changed.
+
+The end-to-end test caught it because it asserts on the *pixels* rather than on
+the draw call count. A test that checked `debug.lines == 1` would have passed
+against a renderer drawing nothing at all — which is the same failure this
+project keeps finding in its own checks.
 
 ## Known inefficiency in the frame path
 

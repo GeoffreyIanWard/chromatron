@@ -25,11 +25,11 @@ use cx_core::Fixed;
 use cx_core::math::ChunkCoord;
 use cx_ecs::{SimSchedule, SimWorld};
 use cx_render::{
-    Camera, DrawStats, InstancedRenderer, MeshData, Presented, RenderDevice, RenderError,
-    SkipReason, WindowSurface,
+    Camera, DebugStats, DrawStats, FrameContents, FrameRenderer, MeshData, Presented, RenderDevice,
+    RenderError, SkipReason, WindowSurface,
 };
 use cx_time::{CatchUp, PacedDriver, TickRate, TimeControl};
-use cx_view::{ViewWorld, extract};
+use cx_view::{DebugDraw, ViewWorld, extract};
 
 /// What one frame did.
 ///
@@ -46,6 +46,8 @@ pub struct FrameReport {
     pub extracted: usize,
     /// What the draw cost, when the frame drew.
     pub draw: Option<DrawStats>,
+    /// What the debug overlay cost, when the frame drew.
+    pub debug: DebugStats,
     /// Why the frame was not drawn, when it was not.
     ///
     /// Distinct from `draw: None`, which also means "this was a headless frame
@@ -58,7 +60,8 @@ pub struct FrameReport {
 /// Sim, clock, view, and renderer composed into a frame.
 pub struct FrameLoop {
     device: RenderDevice,
-    renderer: InstancedRenderer,
+    renderer: FrameRenderer,
+    debug: DebugDraw,
     driver: PacedDriver,
     view: ViewWorld,
     origin: ChunkCoord,
@@ -89,11 +92,12 @@ impl FrameLoop {
         instance_capacity: usize,
     ) -> Result<Self, RenderError> {
         let device = RenderDevice::headless()?;
-        let renderer = InstancedRenderer::new(&device, &MeshData::unit_cube())?;
+        let renderer = FrameRenderer::new(&device, &MeshData::unit_cube())?;
 
         Ok(Self {
             device,
             renderer,
+            debug: DebugDraw::with_capacity(instance_capacity),
             driver: PacedDriver::new(rate),
             view: ViewWorld::with_capacity(instance_capacity),
             origin: ChunkCoord::new(0, 0),
@@ -146,6 +150,16 @@ impl FrameLoop {
         Self::offscreen(rate, 0, 0, instance_capacity)
     }
 
+    /// The debug-draw buffer for the next frame.
+    ///
+    /// Immediate mode: it is cleared after every frame that draws, so whatever
+    /// wants a line has to ask again. Retained debug geometry would need an
+    /// owner and a way to leak, for shapes whose whole purpose is to answer a
+    /// question being asked right now.
+    pub const fn debug(&mut self) -> &mut DebugDraw {
+        &mut self.debug
+    }
+
     /// The most recent frame's extracted instances.
     pub fn view(&self) -> &ViewWorld {
         &self.view
@@ -165,8 +179,10 @@ impl FrameLoop {
         real_delta: Fixed,
     ) -> Result<FrameReport, RenderError> {
         let produced = self.advance(world, schedule, real_delta);
-        let stats = self.draw(camera)?;
-        Ok(self.report(produced, Some(stats)))
+        let (stats, debug) = self.draw(camera)?;
+        let mut report = self.report(produced, Some(stats));
+        report.debug = debug;
+        Ok(report)
     }
 
     /// A frame that also reads the pixels back.
@@ -182,16 +198,12 @@ impl FrameLoop {
     ) -> Result<(FrameReport, cx_render::Readback), RenderError> {
         let produced = self.advance(world, schedule, real_delta);
 
-        let (readback, stats) = self.renderer.render(
-            &self.device,
-            self.width,
-            self.height,
-            camera,
-            self.view.instances(),
-            CLEAR_COLOUR,
-        )?;
+        let (readback, stats, debug) = self.render_offscreen(camera)?;
+        let mut report = self.report(produced, Some(stats));
+        report.debug = debug;
+        self.debug.clear();
 
-        Ok((self.report(produced, Some(stats)), readback))
+        Ok((report, readback))
     }
 
     /// Runs the simulation and extracts, without drawing.
@@ -223,19 +235,33 @@ impl FrameLoop {
         real_delta: Fixed,
     ) -> Result<FrameReport, RenderError> {
         let produced = self.advance(world, schedule, real_delta);
+        let debug_vertices = self.debug.rebase(self.origin);
+
         let presented = surface.present(
             &self.device,
             &self.renderer,
             camera,
-            self.view.instances(),
+            FrameContents {
+                instances: self.view.instances(),
+                debug: debug_vertices,
+            },
             CLEAR_COLOUR,
         )?;
 
         let mut report = self.report(produced, None);
         match presented {
-            Presented::Drawn(stats) => report.draw = Some(stats),
+            Presented::Drawn(stats, debug) => {
+                report.draw = Some(stats);
+                report.debug = debug;
+            }
             Presented::Skipped(reason) => report.skipped = Some(reason),
         }
+
+        // Cleared whether or not the frame drew: a skipped frame that kept its
+        // lines would show them again next frame *plus* the new ones, and an
+        // occluded window would accumulate them without bound.
+        self.debug.clear();
+
         Ok(report)
     }
 
@@ -277,16 +303,30 @@ impl FrameLoop {
         produced
     }
 
-    fn draw(&self, camera: &Camera) -> Result<DrawStats, RenderError> {
-        let (_, stats) = self.renderer.render(
+    fn draw(&mut self, camera: &Camera) -> Result<(DrawStats, DebugStats), RenderError> {
+        let (_, stats, debug) = self.render_offscreen(camera)?;
+        self.debug.clear();
+        Ok((stats, debug))
+    }
+
+    /// The offscreen draw, scene then debug lines.
+    fn render_offscreen(
+        &mut self,
+        camera: &Camera,
+    ) -> Result<(cx_render::Readback, DrawStats, DebugStats), RenderError> {
+        let debug_vertices = self.debug.rebase(self.origin);
+
+        self.renderer.render_offscreen(
             &self.device,
             self.width,
             self.height,
             camera,
-            self.view.instances(),
+            FrameContents {
+                instances: self.view.instances(),
+                debug: debug_vertices,
+            },
             CLEAR_COLOUR,
-        )?;
-        Ok(stats)
+        )
     }
 
     fn report(&self, produced: CatchUp, draw: Option<DrawStats>) -> FrameReport {
@@ -295,6 +335,7 @@ impl FrameLoop {
             alpha: self.view.alpha(),
             extracted: self.view.len(),
             draw,
+            debug: DebugStats::default(),
             skipped: None,
             fell_behind: produced.fell_behind,
         }

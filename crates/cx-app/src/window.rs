@@ -222,12 +222,16 @@ fn action_for(key: KeyCode) -> Option<Action> {
 /// frame ends the run rather than being logged and retried, since the realistic
 /// causes (device lost, surface unrecoverable) repeat every frame and would
 /// otherwise fill the log at the frame rate.
-pub fn run(
+pub fn run<F>(
     config: WindowConfig,
     world: SimWorld,
     schedule: SimSchedule,
     camera: FlyCamera,
-) -> Result<(), AppError> {
+    before_frame: F,
+) -> Result<(), AppError>
+where
+    F: FnMut(&mut FrameLoop),
+{
     let event_loop = EventLoop::new().map_err(|source| AppError::EventLoop {
         reason: source.to_string(),
     })?;
@@ -242,6 +246,7 @@ pub fn run(
 
     let mut app = WindowedApp {
         config,
+        before_frame,
         frame_loop,
         world,
         schedule,
@@ -281,8 +286,13 @@ struct Active {
     surface: WindowSurface,
 }
 
-struct WindowedApp {
+struct WindowedApp<F> {
     config: WindowConfig,
+    /// Called once per frame, before anything is drawn.
+    ///
+    /// Where a client queues its debug geometry. A hook rather than a retained
+    /// list because debug draw is immediate mode — see [`crate::frame::FrameLoop::debug`].
+    before_frame: F,
     frame_loop: FrameLoop,
     world: SimWorld,
     schedule: SimSchedule,
@@ -299,7 +309,7 @@ struct WindowedApp {
     looking: bool,
 }
 
-impl WindowedApp {
+impl<F: FnMut(&mut FrameLoop)> WindowedApp<F> {
     /// Creates the window and its surface.
     fn activate(&mut self, event_loop: &ActiveEventLoop) -> Result<Active, AppError> {
         let attributes = Window::default_attributes()
@@ -381,6 +391,7 @@ impl WindowedApp {
             // occluded window produces tens of thousands a second, and a line
             // each would be the only thing in the log.
             skipped = self.skipped_since_report,
+            debug_lines = report.debug.lines,
             control = ?self.frame_loop.control(),
             // The camera, so flying is verifiable from a log rather than only
             // by looking at the screen.
@@ -398,6 +409,10 @@ impl WindowedApp {
     /// Runs and presents one frame.
     fn draw(&mut self) -> Result<FrameReport, AppError> {
         let delta = self.elapsed();
+
+        // Before anything else, so the client's debug geometry is queued in time
+        // to be rebased and drawn with this frame rather than the next one.
+        (self.before_frame)(&mut self.frame_loop);
 
         // The camera moves in real seconds, not ticks: it is view state, below
         // the firewall, and pinning it to 30 Hz would make it stutter on a
@@ -455,7 +470,7 @@ impl WindowedApp {
     }
 }
 
-impl ApplicationHandler for WindowedApp {
+impl<F: FnMut(&mut FrameLoop)> ApplicationHandler for WindowedApp<F> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         // Called again after a suspend on some platforms, so this must not
         // create a second window.
@@ -690,6 +705,7 @@ mod tests {
             alpha: 0.0,
             extracted: 0,
             draw: None,
+            debug: cx_render::DebugStats::default(),
             skipped,
             fell_behind: false,
         }

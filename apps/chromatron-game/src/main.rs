@@ -14,9 +14,10 @@
 //! Time: `Esc` quit · `Space` pause · `.` step one tick · `[` slower ·
 //! `]` faster · `\` normal speed.
 
-use cx_app::{FlyCamera, WindowConfig, run};
+use cx_app::{FlyCamera, FrameLoop, WindowConfig, run};
 use cx_core::math::{ChunkCoord, Vec3, WorldPos};
 use cx_ecs::{Phase, PreviousTransform, Query, SimSchedule, SimWorld, Transform, WorldConfig};
+use cx_view::DebugColour;
 
 /// Cubes per side of the placeholder grid.
 const GRID: i32 = 20;
@@ -99,6 +100,38 @@ fn build_world() -> (SimWorld, SimSchedule) {
     (world, schedule)
 }
 
+/// Half the grid's extent in metres, for the bounds box.
+fn grid_half_extent() -> f32 {
+    GRID as f32 * SPACING * 0.5
+}
+
+/// Draws the reference geometry every frame.
+///
+/// Called once per frame rather than once at startup, because debug draw is
+/// immediate mode: this is the shape the API is meant to be used in, and having
+/// the client demonstrate it is worth more than a comment saying so.
+fn draw_reference(frame_loop: &mut FrameLoop) {
+    let half = grid_half_extent();
+    let debug = frame_loop.debug();
+
+    // World axes at the origin, in the conventional colours.
+    for (direction, colour) in [
+        (Vec3::X, DebugColour::RED),
+        (Vec3::Y, DebugColour::GREEN),
+        (Vec3::Z, DebugColour::BLUE),
+    ] {
+        debug.arrow(centre(), centre().offset(direction * 10.0), colour);
+    }
+
+    // The bounds the grid orbits within, and the orbit itself.
+    debug.aabb(
+        centre().offset(Vec3::new(-half, -1.0, -half)),
+        centre().offset(Vec3::new(half, 1.0, half)),
+        DebugColour::YELLOW,
+    );
+    debug.sphere(centre(), half, DebugColour::from_linear(0.3, 0.5, 0.8, 0.5));
+}
+
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
@@ -123,6 +156,6 @@ fn main() -> anyhow::Result<()> {
         "starting the windowed client; WASD+QE and right-drag to fly, Space pauses, Esc quits"
     );
 
-    run(config, world, schedule, camera)?;
+    run(config, world, schedule, camera, draw_reference)?;
     Ok(())
 }
