@@ -51,6 +51,7 @@
 )]
 
 pub mod config;
+pub mod dirty;
 pub mod error;
 pub mod handle;
 pub mod hash;
@@ -61,6 +62,7 @@ pub mod rng;
 pub mod time;
 
 pub use config::{Config, ConfigValue, Layer};
+pub use dirty::TileDirty;
 pub use error::{CoreError, ErrorReport, Located};
 pub use handle::{Arena, Handle};
 pub use hash::{hash_block, hash_position, mix64};
