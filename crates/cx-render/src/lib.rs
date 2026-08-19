@@ -31,6 +31,7 @@ pub mod error;
 pub mod instanced;
 pub mod mesh;
 pub mod offscreen;
+pub mod testing;
 
 pub use camera::Camera;
 pub use device::{Backend, DeviceInfo, DeviceKind, RenderDevice};

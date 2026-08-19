@@ -51,9 +51,34 @@ jobs:
         run: rustup show
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         continue-on-error: true
+
+      # lavapipe: Mesa's Vulkan software rasterizer. The renderer's correctness
+      # tests — pixels, draw-call counts, validation errors — need an adapter but
+      # not a fast one, and Linux runners have no GPU. Frame *rate* from a
+      # software rasterizer is meaningless and is not gated here; see the M1
+      # milestone for how that is measured instead.
+      - name: Install a software Vulkan adapter
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq mesa-vulkan-drivers vulkan-tools
+          # Record which adapter the run used. Frame-rate numbers are only
+          # meaningful alongside the hardware that produced them, so the device
+          # name belongs in the log rather than being inferred from the runner
+          # label.
+          vulkaninfo --summary 2>/dev/null | grep -E "deviceName|driverName" \
+            || echo "no Vulkan devices reported; the test step will fail if that is real"
+
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets
-      - run: cargo test --workspace
+      - name: Test
+        # A missing adapter fails rather than skips. Renderer tests skip when
+        # there is no GPU so a bare container stays usable, and cargo swallows a
+        # passing test's output — which made a green run indistinguishable from
+        # one that rendered nothing at all.
+        env:
+          CX_REQUIRE_GPU: '1'
+        run: cargo test --workspace
 
   # Gates-first: these compile and run only once their crate's feature is
   # switched on by the commit that implements it. The step is expected to be a

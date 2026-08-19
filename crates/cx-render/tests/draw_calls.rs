@@ -16,23 +16,14 @@
 
 use cx_core::math::Vec3;
 use cx_render::instanced::instance_at;
-use cx_render::{Camera, InstancedRenderer, MeshData, RenderDevice};
+use cx_render::testing::device_or_skip;
+use cx_render::{Camera, InstancedRenderer, MeshData};
 
 /// The count the M1 gate names.
 const INSTANCE_COUNT: usize = 100_000;
 
 /// The gate's draw-call ceiling.
 const MAX_DRAW_CALLS: u32 = 20;
-
-fn device_or_skip() -> Option<RenderDevice> {
-    match RenderDevice::headless() {
-        Ok(device) => Some(device),
-        Err(error) => {
-            println!("skipping: no graphics adapter ({error})");
-            None
-        }
-    }
-}
 
 #[test]
 fn one_hundred_thousand_instances_stay_under_the_draw_call_ceiling() {

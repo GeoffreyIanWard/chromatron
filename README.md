@@ -26,6 +26,16 @@ A Rust engine for large-scale 3D simulations, with games built on top. Desktop o
 | `docs/adr/` | Decision records — the source of truth for *why*. Append-only. |
 | `docs/bench/` | Benchmark baselines and memory budget — both are CI gates |
 
+## Merge policy
+
+Pull requests are **squash merged**. Every commit on `main` is therefore one reviewed pull
+request, and is green by construction — which keeps `git bisect` reliable.
+
+The fine-grained per-idea commits inside a branch are for review, and the pull request
+preserves them. `main` has a different audience and a different job: being bisectable. An
+earlier stacked merge left a commit on `main` that fails CI in isolation, which is the
+failure this policy prevents from recurring.
+
 ## Rules for maintaining these docs
 
 - Never restate a fact across specs, milestones, and ADRs. Link instead.
