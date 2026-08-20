@@ -133,6 +133,18 @@ debug = 1
 [profile.dev.package."*"]
 opt-level = 3
 
+# Our own crates, when running tests. Worldgen's tests operate on a whole block
+# — 26 million cells, and erosion sweeps it a dozen times — which at `opt-level
+# = 0` does not finish in any time worth waiting for. CI's `cargo test` went
+# from 5 minutes to 23 as the block-scale tests landed, and erosion would have
+# taken it past the job timeout.
+#
+# `2` rather than `3`: it recovers essentially all of the speed and keeps
+# compile times and debuginfo quality closer to a debug build, which is what the
+# rest of the workspace's tests want.
+[profile.test]
+opt-level = 2
+
 [profile.bench]
 lto = "thin"
 codegen-units = 1

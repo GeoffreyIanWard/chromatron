@@ -111,7 +111,12 @@ const fn order_key(height: f32) -> u32 {
 pub struct FlowNetwork {
     filled: BlockGrid,
     direction: Vec<FlowDir>,
-    accumulation: Vec<u32>,
+    accumulation: Vec<f32>,
+    /// Cells in drainage order: every cell appears **after** everything that
+    /// drains into it. A by-product of [`accumulate`]'s traversal, kept because
+    /// erosion needs the same ordering reversed and recomputing it would be a
+    /// second full pass over 26 million cells for information already derived.
+    order: Vec<u32>,
 }
 
 impl FlowNetwork {
@@ -124,12 +129,13 @@ impl FlowNetwork {
         let filled = fill_depressions(elevation);
         let across_flats = resolve_flats(&filled);
         let direction = flow_directions(&filled, &across_flats);
-        let accumulation = accumulate(&direction);
+        let (accumulation, order) = accumulate(&filled, &direction);
 
         Self {
             filled,
             direction,
             accumulation,
+            order,
         }
     }
 
@@ -153,8 +159,8 @@ impl FlowNetwork {
     ///
     /// The discharge proxy. A cell with accumulation 1 is a hilltop; the large
     /// values are the channels.
-    pub fn accumulation(&self, cell: ErosionCell) -> u32 {
-        self.accumulation.get(flat(cell)).copied().unwrap_or(0)
+    pub fn accumulation(&self, cell: ErosionCell) -> f32 {
+        self.accumulation.get(flat(cell)).copied().unwrap_or(0.0)
     }
 
     /// Cells with no downhill neighbour that are **not** on the grid boundary.
@@ -172,14 +178,47 @@ impl FlowNetwork {
             .count()
     }
 
+    /// Cells in drainage order — everything upstream of a cell comes before it.
+    ///
+    /// Erosion walks this **backwards**, so a cell is always solved after the
+    /// one it drains into. That is what makes the implicit stream-power update
+    /// a single pass rather than an iteration to convergence.
+    pub fn drainage_order(&self) -> &[u32] {
+        &self.order
+    }
+
+    /// The cell a flat index refers to, for walking [`Self::drainage_order`].
+    pub fn cell_at(index: u32) -> Option<ErosionCell> {
+        unflat(index)
+    }
+
+    /// Metres from a cell to the one it drains into, or `None` at an outlet.
+    ///
+    /// Diagonal neighbours are 1.414 cells away. Stream power divides by this,
+    /// so treating every neighbour as one cell apart would make diagonal
+    /// reaches incise 41% too fast — and since D8 channels alternate between
+    /// orthogonal and diagonal steps, the error shows up as a channel whose
+    /// depth oscillates along its length.
+    pub fn distance_downstream(&self, cell: ErosionCell) -> Option<f32> {
+        let direction = self.direction(cell);
+        let (dx, dz) = NEIGHBOURS.get(direction as usize).copied()?;
+        offset(cell, dx, dz)?;
+
+        Some(if dx.abs() + dz.abs() == 2 {
+            EROSION_CELL_SIZE * std::f32::consts::SQRT_2
+        } else {
+            EROSION_CELL_SIZE
+        })
+    }
+
     /// The largest accumulation anywhere on the grid.
     ///
     /// On a well-formed network this is close to the cell count — nearly
     /// everything drains through one of a few outlets. A small maximum means
     /// flow is fragmenting rather than collecting, which is what a broken fill
     /// looks like.
-    pub fn max_accumulation(&self) -> u32 {
-        self.accumulation.iter().copied().max().unwrap_or(0)
+    pub fn max_accumulation(&self) -> f32 {
+        self.accumulation.iter().copied().fold(0.0, f32::max)
     }
 }
 
@@ -661,57 +700,181 @@ fn flow_directions(filled: &BlockGrid, across_flats: &[u32]) -> Vec<FlowDir> {
 /// with accumulation refusing to collect inside any lake. Deriving the order
 /// from the direction field itself cannot make that mistake, whatever later
 /// stages do to the field.
-fn accumulate(direction: &[FlowDir]) -> Vec<u32> {
-    let mut accumulation = vec![1u32; CELLS];
+/// How sharply multiple-flow-direction weighting favours the steepest neighbour.
+///
+/// Flow leaving a cell is split across *every* downslope neighbour in proportion
+/// to `slope^MFD_EXPONENT`. At 1.0 the split is gentle and drainage smears
+/// across hillsides; as the exponent grows it concentrates, and in the limit it
+/// is D8 again.
+///
+/// 2.0 keeps channels sharp while removing the direction bias described on
+/// [`accumulate`].
+const MFD_EXPONENT: f32 = 2.0;
 
-    // How many cells drain into each. At most eight, so a byte.
+/// Flow accumulation, split across every downslope neighbour.
+///
+/// # Why not simply follow the D8 direction
+///
+/// Because D8 has only eight directions, and on a smooth surface every channel
+/// snaps to the nearest one. Accumulation then arrives in single-cell lines
+/// running at multiples of 45 degrees. That is survivable on its own — but
+/// erosion multiplies by `A^m` and feeds the result back into the surface, so
+/// the bias compounds: a line that captures slightly more cuts slightly deeper,
+/// which captures more still. Twelve rounds of that turns a landscape into a
+/// circuit board, with channels in hard diagonal and orthogonal runs and a
+/// herringbone texture over every hillside.
+///
+/// That is not a prediction. It is what the first version produced, and it was
+/// found by rendering the eroded block and looking at it — every assertion about
+/// erosion passed against it, because "channels cut more than hillslopes" is
+/// still perfectly true when the channels are straight lines.
+///
+/// So flow is split across all downslope neighbours, weighted by
+/// `slope^MFD_EXPONENT` (Freeman 1991; Quinn 1991). The direction of steepest
+/// descent still gets most of it, but the total is no longer confined to eight
+/// rays, and the grid stops printing itself into the terrain.
+///
+/// D8 is still what [`FlowNetwork::downstream`] reports and what erosion incises
+/// towards — a single receiver is what keeps the implicit stream-power solve
+/// closed-form. Only the *area* term is split.
+///
+/// # Order
+///
+/// Kahn's algorithm over the multi-receiver graph: count how many cells send
+/// anything to each cell, start from the ones nothing drains into, and release a
+/// cell when its last contributor is done. Weights are recomputed as each cell
+/// is processed rather than stored — eight per cell over 26 million cells would
+/// be 840 MB, against a 0.42 GB budget for the whole working set (`ADR-0015`).
+fn accumulate(filled: &BlockGrid, direction: &[FlowDir]) -> (Vec<f32>, Vec<u32>) {
+    let mut accumulation = vec![1.0f32; CELLS];
+    let mut order: Vec<u32> = Vec::with_capacity(CELLS);
+
+    // How many cells send flow to each. At most eight, so a byte.
     let mut incoming = vec![0u8; CELLS];
     for index in 0..CELLS {
         let Some(cell) = unflat(index as u32) else {
             continue;
         };
-        let Some(next) = step(cell, direction.get(index).copied().unwrap_or(NO_FLOW)) else {
-            continue;
-        };
-        if let Some(slot) = incoming.get_mut(flat(next)) {
-            *slot = slot.saturating_add(1);
-        }
+        each_receiver(filled, direction, cell, |next, _| {
+            if let Some(slot) = incoming.get_mut(flat(next)) {
+                *slot = slot.saturating_add(1);
+            }
+        });
     }
 
-    // The sources: ridge lines and isolated cells, everything nothing flows into.
+    // The sources: ridge lines and everything nothing flows into.
     let mut ready: std::collections::VecDeque<u32> = (0..CELLS)
         .filter(|index| incoming.get(*index).copied().unwrap_or(1) == 0)
         .map(|index| index as u32)
         .collect();
 
     while let Some(index) = ready.pop_front() {
+        order.push(index);
+
         let index = index as usize;
         let Some(cell) = unflat(index as u32) else {
             continue;
         };
+        let carried = accumulation.get(index).copied().unwrap_or(0.0);
 
-        let carried = accumulation.get(index).copied().unwrap_or(0);
-        let Some(next) = step(cell, direction.get(index).copied().unwrap_or(NO_FLOW)) else {
-            continue;
-        };
-        let next_index = flat(next);
+        let mut released: [Option<usize>; 8] = [None; 8];
+        let mut count = 0usize;
 
-        if let Some(slot) = accumulation.get_mut(next_index) {
-            // Saturating: 26 million cells cannot overflow a `u32`, but a larger
-            // block later should degrade to a wrong-but-bounded number rather
-            // than wrapping to near zero and erasing the largest river.
-            *slot = slot.saturating_add(carried);
-        }
+        each_receiver(filled, direction, cell, |next, share| {
+            let next_index = flat(next);
+            if let Some(slot) = accumulation.get_mut(next_index) {
+                *slot += carried * share;
+            }
+            if let Some(slot) = released.get_mut(count) {
+                *slot = Some(next_index);
+            }
+            count += 1;
+        });
 
-        if let Some(slot) = incoming.get_mut(next_index) {
-            *slot = slot.saturating_sub(1);
-            if *slot == 0 {
-                ready.push_back(next_index as u32);
+        for slot in released.iter().flatten() {
+            if let Some(remaining) = incoming.get_mut(*slot) {
+                *remaining = remaining.saturating_sub(1);
+                if *remaining == 0 {
+                    ready.push_back(*slot as u32);
+                }
             }
         }
     }
 
-    accumulation
+    (accumulation, order)
+}
+
+/// Calls `visit` once per downslope neighbour with its share of the flow.
+///
+/// Shares sum to one, so nothing is created or lost crossing a cell — the
+/// property that makes accumulation mean "how much drains through here".
+///
+/// A cell with no strictly-lower neighbour falls back to its D8 direction, which
+/// is where flat resolution has already decided the water goes. Without that
+/// fallback, every lake would be a dead end for accumulation.
+#[allow(
+    clippy::float_cmp,
+    reason = "Comparing a stored height to itself-derived values, as in \
+              `resolve_flats`: a neighbour at exactly the same height is on a \
+              flat and must be routed by the D8 fallback, not given a share of \
+              zero slope."
+)]
+fn each_receiver(
+    filled: &BlockGrid,
+    direction: &[FlowDir],
+    cell: ErosionCell,
+    mut visit: impl FnMut(ErosionCell, f32),
+) {
+    let height = filled.get(cell);
+
+    let mut weights = [0.0f32; 8];
+    let mut total = 0.0f32;
+
+    for (index, (dx, dz)) in NEIGHBOURS.iter().enumerate() {
+        let Some(next) = offset(cell, *dx, *dz) else {
+            continue;
+        };
+        let drop = height - filled.get(next);
+        if drop <= 0.0 {
+            continue;
+        }
+
+        let distance = if dx.abs() + dz.abs() == 2 {
+            EROSION_CELL_SIZE * std::f32::consts::SQRT_2
+        } else {
+            EROSION_CELL_SIZE
+        };
+
+        // Gradient, not drop, for the reason `flow_directions` gives: comparing
+        // raw drops would over-weight the diagonals by 41% and reintroduce the
+        // bias this function exists to remove.
+        let weight = (drop / distance).powf(MFD_EXPONENT);
+        if let Some(slot) = weights.get_mut(index) {
+            *slot = weight;
+        }
+        total += weight;
+    }
+
+    if total > 0.0 {
+        for (index, weight) in weights.iter().enumerate() {
+            if *weight <= 0.0 {
+                continue;
+            }
+            let Some((dx, dz)) = NEIGHBOURS.get(index).copied() else {
+                continue;
+            };
+            let Some(next) = offset(cell, dx, dz) else {
+                continue;
+            };
+            visit(next, weight / total);
+        }
+        return;
+    }
+
+    // Flat, or an outlet. Whatever D8 decided, at full strength.
+    if let Some(next) = step(cell, direction.get(flat(cell)).copied().unwrap_or(NO_FLOW)) {
+        visit(next, 1.0);
+    }
 }
 
 /// The neighbour a direction points at.
@@ -884,14 +1047,14 @@ mod tests {
         let source = ErosionCell::new(0, 2_500).expect("in range");
         assert_eq!(
             network.accumulation(source),
-            1,
+            1.0,
             "a cell with nothing uphill of it should carry only itself"
         );
 
         // And a cell one column downhill carries that source as well as itself.
         let below = ErosionCell::new(1, 2_500).expect("in range");
         assert!(
-            network.accumulation(below) > 1,
+            network.accumulation(below) > 1.0,
             "the cell below a source should carry it"
         );
 
@@ -906,7 +1069,7 @@ mod tests {
         // maximum well under one row would mean flow stalling partway.
         let max = network.max_accumulation();
         assert!(
-            max >= EDGE,
+            max >= EDGE as f32,
             "the largest channel carries {max} cells, less than the {EDGE} of a \
              single row, so flow is stalling before it reaches the edge"
         );
