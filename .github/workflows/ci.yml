@@ -141,6 +141,35 @@ jobs:
           cargo test -p cx-app --test debug_draw -- --nocapture
           cargo test -p cx-render --test draw_calls -- --nocapture
 
+  # S21's graph diff annotates rather than blocking — a check that fails every
+  # legitimate architecture change gets switched off within a month. The one
+  # exception is ADR-0011's writer limit on ELEVATION, which `--strict` turns
+  # into a failure, because a third writer is a defect rather than a change.
+  #
+  # The rendered page is uploaded so a reviewer can open the diagram from the
+  # run rather than rebuilding it locally.
+  architecture:
+    name: architecture graph
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install toolchain
+        run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        continue-on-error: true
+      - name: Export and render
+        run: |
+          set -euo pipefail
+          cargo run -q -p chromatron-cli -- graph --profile full-sim --out graph.json
+          cargo run -q -p graph-viewer -- --graph graph.json --out graph.html --strict
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: architecture-graph
+          path: |
+            graph.json
+            graph.html
+
   # Gates-first: these compile and run only once their crate's feature is
   # switched on by the commit that implements it. The step is expected to be a
   # no-op until then, and is wired up now so that enabling a feature cannot

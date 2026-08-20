@@ -258,6 +258,9 @@ fn banned_external_matcher_covers_crate_families() {
     }
 }
 
+/// Repo tooling, which sits on neither side of the firewall.
+const TOOLS: &[&str] = &["ci-checks", "graph-viewer"];
+
 /// Which crate owns each contained external dependency.
 ///
 /// `02-architecture.md` assigns each of these to exactly one crate: `wgpu` to
@@ -374,7 +377,9 @@ fn every_workspace_crate_is_classified() {
             !SIM_CRATES.contains(&name.as_str())
                 && !PRESENTATION_CRATES.contains(&name.as_str())
                 && !name.starts_with("chromatron-")
-                && name != "ci-checks"
+                // Repo tooling. Neither side of the firewall: these do not ship
+                // in the engine and are not part of the simulation.
+                && !TOOLS.contains(&name.as_str())
         })
         .collect();
 
