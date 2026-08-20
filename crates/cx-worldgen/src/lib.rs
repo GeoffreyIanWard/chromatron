@@ -32,6 +32,7 @@
 )]
 
 pub mod block;
+pub mod carve;
 pub mod elevation;
 pub mod flow;
 pub mod hydraulic;
@@ -40,6 +41,7 @@ pub mod thermal;
 pub mod worldmap;
 
 pub use block::{BlockCoordinates, BlockGrid, ErosionCell};
+pub use carve::{CarveReport, CarveSettings, carve};
 pub use elevation::{ElevationGenerator, TerrainShape};
 pub use flow::{FlowNetwork, NO_FLOW};
 pub use hydraulic::{ErosionReport, ErosionSettings, erode};
