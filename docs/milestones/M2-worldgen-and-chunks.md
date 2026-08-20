@@ -62,6 +62,10 @@ affordable to have both.
   not distinguish from the right answer was caught by rendering the network and looking at it.
   See S07's "what is implemented" for what each cost.
 
+- **Step 3, hydraulic erosion** — `cx_worldgen::hydraulic`. Implicit stream power, 12 rounds
+  over a block in 89 s single-threaded, 22 m mean lowering, zero sinks. Carries a recorded and
+  diagnosed artifact: D8 grid bias printing a herringbone into the eroded surface. See S07.
+
 ## Notes
 
 **The seam question gets answered here, visually.** Fine erosion detail cannot be perfectly continuous across block boundaries with a finite halo. Rivers should stay coherent because region-level drainage constrains them from above — verify that first, since it is the failure that would actually be noticeable. If hillside detail shows a visible seam, the mitigations in order of preference are a wider halo, fewer iterations with stronger per-iteration effect, or a post-pass seam blend.

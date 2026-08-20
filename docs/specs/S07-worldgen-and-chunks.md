@@ -105,6 +105,32 @@ neighbour computes as core. Four adjacent blocks were also rendered as a shaded
 heightmap and looked at: no seam is visible, which is what the halo arithmetic
 being right looks like.
 
+**Step 3: hydraulic erosion.** `cx_worldgen::hydraulic` — implicit stream-power
+incision (Braun & Willett 2013), one closed-form pass per round over the drainage
+order, with a re-route between rounds. Twelve rounds over a whole block take
+**89 s** single-threaded and remove a mean of **22 m**, deepest 69 m, leaving
+zero interior sinks.
+
+Implicit rather than explicit deliberately. Explicit stream power is stable only
+below a timestep that shrinks as drainage area grows, and area here spans 1 to 8
+million cells — so the stable step would be set by the largest river and every
+hillside integrated thousands of times more finely than it needs. The implicit
+update is a weighted average of a cell and its receiver, so the result is always
+between them and the timestep becomes a shaping knob rather than a stability
+constraint. A 1,000x timestep flattens the landscape instead of tearing it apart,
+and that is asserted rather than argued.
+
+**Known artifact: D8 grid bias.** Erosion incises towards one receiver and D8
+offers eight, so grooves snap to multiples of 45 degrees and the incision feedback
+compounds the bias over rounds. An eroded block renders with a herringbone texture
+and channels in hard diagonal segments. Flow accumulation was changed to split
+across all downslope neighbours to address it; that improved the channel network
+and left the surface striping unchanged, so the cause is the single-receiver
+incision, not the area term. Thermal erosion (step 4) relaxes over-steep slopes
+and is the next thing to measure against it; multi-receiver incision is the
+fallback. Every assertion in the module passes against the biased surface, which
+is why this is recorded from a render rather than from a test.
+
 **Step 2: depression fill and flow routing.** `cx_worldgen::flow` — priority-flood
 filling, D8 direction, and flow accumulation, over a whole block in **3.3 s**
 single-threaded. The largest channel on a test block carries **30.8% of the block**,
@@ -141,8 +167,8 @@ sync between a generation run and a later regeneration of the same block
 the first module with a dependency, and the first entry in S21's field-access
 layer.
 
-Steps 3–9 remain: hydraulic and thermal erosion, channel carving, the bake,
-static field derivation, biome assignment, and scatter.
+Steps 4–9 remain: thermal erosion, channel carving, the bake, static field
+derivation, biome assignment, and scatter.
 
 **The terrain therefore looks smooth, and should.** A plausible-looking
 placeholder would have hidden exactly the difference erosion makes, which is the

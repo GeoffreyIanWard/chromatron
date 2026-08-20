@@ -49,7 +49,7 @@ fn a_real_block_routes_into_a_drainage_network() {
     let max = network.max_accumulation();
     println!(
         "flow network: {EDGE}x{EDGE} = {CELLS} cells in {elapsed:?} (single-threaded, \
-         step 2 of 9); largest channel carries {max} cells ({:.1}% of the block)",
+         step 2 of 9); largest channel carries {max:.0} cells ({:.1}% of the block)",
         f64::from(max) / CELLS as f64 * 100.0
     );
 
@@ -66,7 +66,7 @@ fn a_real_block_routes_into_a_drainage_network() {
     // so drainage collects: the largest channel should carry far more than the
     // 5,120 cells of a single row.
     assert!(
-        max > EDGE * 10,
+        max > (EDGE * 10) as f32,
         "the largest channel carries {max} cells, barely more than the {EDGE} of \
          one row — flow is running in parallel lines rather than collecting into \
          a network"
