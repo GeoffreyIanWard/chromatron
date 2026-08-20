@@ -355,6 +355,20 @@ impl WindowSurface {
             label: Some("cx-render present"),
         });
 
+        // Culling first: the compute pass compacts the visible instances and
+        // fills in the draw's instance count, so the scene draws indirect and
+        // the CPU never learns how many survived.
+        let culled = renderer.cull().encode(
+            device,
+            &mut encoder,
+            &instance_buffer,
+            contents.instances.len() as u32,
+            renderer.instanced().index_count(),
+            crate::culling::Frustum::from_view_projection(
+                camera.view_projection(self.config.width as f32 / self.config.height as f32),
+            ),
+        );
+
         let stats = renderer.instanced().encode_draw(
             device.wgpu_queue(),
             &mut encoder,
@@ -365,8 +379,10 @@ impl WindowSurface {
                 width: self.config.width,
                 height: self.config.height,
                 camera,
-                instance_buffer: &instance_buffer,
-                instance_count: contents.instances.len() as u32,
+                // The compacted survivors, not the full set.
+                instance_buffer: renderer.cull().visible(),
+                instance_count: culled,
+                indirect: Some(renderer.cull().draw_args()),
                 clear,
             },
         );

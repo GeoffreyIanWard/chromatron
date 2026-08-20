@@ -16,6 +16,7 @@
 use cx_view::DebugVertex;
 
 use crate::camera::Camera;
+use crate::cull_pass::CullPass;
 use crate::debug::{DebugRenderer, DebugStats};
 use crate::device::RenderDevice;
 use crate::error::RenderError;
@@ -44,16 +45,32 @@ pub struct FrameRenderer {
     instanced: InstancedRenderer,
     debug: DebugRenderer,
     ui: UiRenderer,
+    cull: CullPass,
 }
 
 impl FrameRenderer {
-    /// Builds both pipelines for `mesh`.
-    pub fn new(device: &RenderDevice, mesh: &MeshData) -> Result<Self, RenderError> {
+    /// Builds every pipeline for `mesh`.
+    ///
+    /// `instance_capacity` sizes the culling pass's output buffer. It is a
+    /// startup decision because growing it mid-frame would mean rebuilding a
+    /// bind group during encoding; a scene larger than it is clamped, and the
+    /// clamp is tested.
+    pub fn new(
+        device: &RenderDevice,
+        mesh: &MeshData,
+        instance_capacity: u32,
+    ) -> Result<Self, RenderError> {
         Ok(Self {
             instanced: InstancedRenderer::new(device, mesh)?,
             debug: DebugRenderer::new(device),
             ui: UiRenderer::new(device),
+            cull: CullPass::new(device, instance_capacity),
         })
+    }
+
+    /// The culling pass.
+    pub(crate) const fn cull(&self) -> &CullPass {
+        &self.cull
     }
 
     /// Draws a frame to an offscreen target and reads the pixels back.
