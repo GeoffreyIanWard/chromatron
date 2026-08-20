@@ -39,6 +39,14 @@ struct Cli {
     #[arg(long)]
     baseline: Option<PathBuf>,
 
+    /// Base URL for source links, such as
+    /// `https://github.com/owner/repo/blob/main/`.
+    ///
+    /// Without it the locations are plain text and the page contains no URL at
+    /// all, which is how it stays self-contained by default.
+    #[arg(long)]
+    link_prefix: Option<String>,
+
     /// Exit non-zero if the graph breaks a rule rather than merely changing.
     ///
     /// Off by default, per S21: a diff that blocks merges on every legitimate
@@ -68,7 +76,12 @@ fn main() -> Result<()> {
         .as_ref()
         .map(|before| Diff::between(before, &graph));
 
-    let page = render::render(&graph, &layout::layout(&graph), comparison.as_ref());
+    let page = render::render(
+        &graph,
+        &layout::layout(&graph),
+        comparison.as_ref(),
+        cli.link_prefix.as_deref(),
+    );
 
     let out = cli.out.unwrap_or_else(|| cli.graph.with_extension("html"));
     std::fs::write(&out, &page).with_context(|| format!("writing {}", out.display()))?;

@@ -51,6 +51,8 @@ pub struct Placed {
     pub kind: NodeKind,
     /// Extra text for the tooltip.
     pub detail: String,
+    /// Where this was declared, as `path:line`, when the payload carried it.
+    pub source: Option<String>,
 }
 
 /// What a placed node is, which decides how it is drawn.
@@ -215,6 +217,10 @@ fn composition(graph: &Graph) -> Layer {
                 systems,
                 if systems == 1 { "" } else { "s" }
             ),
+            // A module is a Rust type rather than a registration call, so it has
+            // no single line of its own. Its systems do, and those are the nodes
+            // worth opening.
+            source: None,
         });
     }
 
@@ -297,6 +303,7 @@ fn composition(graph: &Graph) -> Layer {
                 (None, Some(degraded)) => format!("absent — {degraded}"),
                 (None, None) => "absent".to_owned(),
             },
+            source: None,
         });
     }
 
@@ -378,6 +385,7 @@ fn schedule(graph: &Graph) -> Layer {
             height: 0.5,
             kind: NodeKind::System,
             detail: format!("{} · {}", system.module, system.phase),
+            source: system.source.clone(),
         });
     }
 
@@ -415,6 +423,7 @@ fn field_access(graph: &Graph) -> Layer {
             height: 0.3 + writers as f32 * 0.5,
             kind: NodeKind::Field,
             detail: format!("{writers} writer{}", if writers == 1 { "" } else { "s" }),
+            source: None,
         });
     }
 
@@ -440,6 +449,13 @@ fn field_access(graph: &Graph) -> Layer {
             height: 0.4,
             kind: NodeKind::System,
             detail: module.to_owned(),
+            // The `registrar.access(...)` line, which is where a disputed claim
+            // about who writes a field is settled.
+            source: graph
+                .field_access
+                .iter()
+                .find(|access| access.system == name)
+                .and_then(|access| access.source.clone()),
         });
     }
 

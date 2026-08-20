@@ -52,16 +52,34 @@ fn project(cell: Cell, height: f32) -> (f32, f32) {
     (x, y)
 }
 
+/// Where source links point, when the caller wants them.
+///
+/// `None` — the default — writes the location as plain text. That keeps the
+/// page's self-containment absolute: with no prefix there is no URL in the file
+/// at all, which is the property the test asserts.
+///
+/// A prefix such as `https://github.com/owner/repo/blob/main/` turns each
+/// location into an anchor. A link is not an asset request — nothing is fetched
+/// until someone clicks it — but it is still the one thing that puts an external
+/// address in the file, so it is opt-in rather than assumed.
+pub type LinkPrefix<'a> = Option<&'a str>;
+
 /// Renders a graph to a standalone HTML page.
-pub fn render(graph: &Graph, layout: &Layout, diff: Option<&Diff>) -> String {
+pub fn render(
+    graph: &Graph,
+    layout: &Layout,
+    diff: Option<&Diff>,
+    links: LinkPrefix<'_>,
+) -> String {
     let mut body = String::new();
 
     for (index, layer) in layout.layers.iter().enumerate() {
         let _ = write!(
             body,
-            r#"<section class="layer" id="layer-{index}"{}>{}</section>"#,
+            r#"<section class="layer" id="layer-{index}"{}>{}{}</section>"#,
             if index == 0 { "" } else { r#" hidden"# },
-            svg_for(layer, diff)
+            svg_for(layer, diff),
+            sources_for(layer, links)
         );
     }
 
@@ -150,6 +168,54 @@ fn svg_for(layer: &Layer, diff: Option<&Diff>) -> String {
         r#"<svg viewBox="{} {} {} {}" role="img" aria-label="{} layer">{shapes}</svg>"#,
         bounds.0, bounds.1, bounds.2, bounds.3, layer.name
     )
+}
+
+/// The source index below a layer's diagram.
+///
+/// A list rather than text on the blocks: a `path:line` is far too long to sit
+/// on a 90-pixel isometric face, and putting it there would make the diagram
+/// unreadable to add information most readers want only occasionally.
+fn sources_for(layer: &Layer, links: LinkPrefix<'_>) -> String {
+    let mut rows: Vec<(&str, &str)> = layer
+        .nodes
+        .iter()
+        .filter_map(|node| {
+            node.source
+                .as_deref()
+                .map(|source| (node.label.as_str(), source))
+        })
+        .collect();
+    rows.sort_unstable();
+    rows.dedup();
+
+    if rows.is_empty() {
+        return String::new();
+    }
+
+    let mut list = String::from(r#"<ul class="sources">"#);
+    for (label, source) in rows {
+        let location = match links {
+            Some(prefix) => {
+                // `path:line` becomes `path#Lline`, which is the anchor form
+                // GitHub, GitLab, and Gitea all understand.
+                let anchored = match source.rsplit_once(':') {
+                    Some((path, line)) => format!("{path}#L{line}"),
+                    None => source.to_owned(),
+                };
+                format!(
+                    r#"<a href="{}{}">{}</a>"#,
+                    escape(prefix),
+                    escape(&anchored),
+                    escape(source)
+                )
+            }
+            None => escape(source),
+        };
+
+        let _ = write!(list, "<li><b>{}</b> {location}</li>", escape(label));
+    }
+    list.push_str("</ul>");
+    list
 }
 
 /// The viewBox that contains every node, with a margin.
@@ -313,6 +379,12 @@ svg { width:100%; height:auto; max-height:74vh; }
 .legend .s::before { background:var(--system); }
 .legend .f::before { background:var(--field); }
 .diff { margin-top:8px; font-size:13px; }
+.sources { list-style:none; margin:12px 0 0; padding:0; columns:2; column-gap:32px;
+  color:var(--dim); font-size:12px;
+  font-family:ui-monospace, SFMono-Regular, Menlo, monospace; }
+.sources li { break-inside:avoid; margin:0 0 3px; }
+.sources b { color:var(--ink); font-weight:500; }
+.sources a { color:var(--dim); }
 .diff b { font-weight:600; }
 </style></head><body>"#;
 
@@ -323,6 +395,7 @@ const PAGE_TAIL: &str = r#"<div class="legend">
   <span class="s">system</span><span class="f">field</span>
   <span>block height carries the scalar named above each layer</span>
   <span>hover any block for detail</span>
+  <span>source locations are listed under each diagram</span>
 </div>
 <script>
 // The only script in the page: switching layers. Every position was computed in
@@ -374,7 +447,7 @@ mod tests {
 
     fn page() -> String {
         let graph = sample();
-        render(&graph, &layout(&graph), None)
+        render(&graph, &layout(&graph), None, None)
     }
 
     /// **S21: the viewer makes no external asset requests.**
@@ -449,7 +522,7 @@ mod tests {
         )
         .expect("valid");
 
-        let html = render(&graph, &layout(&graph), None);
+        let html = render(&graph, &layout(&graph), None, None);
         assert!(
             !html.contains("<script>alert(1)</script>"),
             "a module name was injected into the page as markup"
@@ -465,7 +538,7 @@ mod tests {
         )
         .expect("valid");
 
-        let html = render(&graph, &layout(&graph), None);
+        let html = render(&graph, &layout(&graph), None, None);
         assert!(html.contains("Nothing in this layer"));
         assert!(html.starts_with("<!doctype html>"));
     }
@@ -490,7 +563,7 @@ mod tests {
         // paints over it and the diagram reads as though the near one is
         // missing.
         let graph = sample();
-        let html = render(&graph, &layout(&graph), None);
+        let html = render(&graph, &layout(&graph), None, None);
 
         let composition = html
             .split("<section class=\"layer\" id=\"layer-0\"")
@@ -513,5 +586,118 @@ mod tests {
                 .unwrap_or_else(|| panic!("{} is not drawn after the block before it", node.label));
             last += found;
         }
+    }
+
+    /// A payload carrying source locations, as schema 1.1 emits.
+    fn with_sources() -> Graph {
+        Graph::parse(
+            r#"{"schema":"1.1","schedule_hash":"h","modules":[],"capabilities":[],
+                "systems":[
+                    {"name":"generate_elevation","phase":"ChunkLifecycle","phase_index":1,
+                     "module":"worldgen","source":"crates/cx-worldgen/src/module.rs:83"}
+                ],
+                "field_access":[
+                    {"field":"ELEVATION","system":"generate_elevation","access":"write",
+                     "module":"worldgen","source":"crates/cx-worldgen/src/module.rs:93"}
+                ]}"#,
+        )
+        .expect("the fixture should parse")
+    }
+
+    #[test]
+    fn a_location_appears_under_the_diagram() {
+        let graph = with_sources();
+        let html = render(&graph, &layout(&graph), None, None);
+
+        assert!(
+            html.contains("crates/cx-worldgen/src/module.rs:83"),
+            "the system's registration line should be listed"
+        );
+        assert!(
+            html.contains("crates/cx-worldgen/src/module.rs:93"),
+            "the access declaration line should be listed too — it is where a \
+             disputed claim about who writes a field gets settled"
+        );
+    }
+
+    /// **The self-containment criterion still holds by default.**
+    ///
+    /// Adding source locations must not quietly put a URL in every page.
+    #[test]
+    fn without_a_prefix_the_page_still_contains_no_url() {
+        let graph = with_sources();
+        let html = render(&graph, &layout(&graph), None, None);
+
+        for forbidden in ["http://", "https://", "<a href"] {
+            assert!(
+                !html.contains(forbidden),
+                "the default page contains `{forbidden}`"
+            );
+        }
+    }
+
+    #[test]
+    fn a_prefix_turns_locations_into_links() {
+        let graph = with_sources();
+        let html = render(
+            &graph,
+            &layout(&graph),
+            None,
+            Some("https://example.invalid/blob/main/"),
+        );
+
+        assert!(
+            html.contains(
+                r#"<a href="https://example.invalid/blob/main/crates/cx-worldgen/src/module.rs#L83""#
+            ),
+            "the link should use the `#L<line>` anchor form that forges understand:\n{html}"
+        );
+    }
+
+    #[test]
+    fn a_prefix_does_not_escape_the_page_through_a_crafted_location() {
+        // The location comes from a file the viewer was handed. Interpolating it
+        // into an href unescaped is the ordinary way a local tool becomes a
+        // vulnerability.
+        let graph = Graph::parse(
+            r#"{"schema":"1.1","schedule_hash":"h","modules":[],"capabilities":[],
+                "systems":[{"name":"s","phase":"AgentAct","phase_index":7,"module":"m",
+                            "source":"</a><script>alert(1)</script>:1"}],
+                "field_access":[]}"#,
+        )
+        .expect("valid");
+
+        let html = render(
+            &graph,
+            &layout(&graph),
+            None,
+            Some("https://example.invalid/"),
+        );
+
+        assert!(
+            !html.contains("<script>alert(1)</script>"),
+            "a crafted source location was written into the page as markup"
+        );
+        assert!(html.contains("&lt;script&gt;"));
+    }
+
+    #[test]
+    fn a_schema_1_0_payload_still_renders() {
+        // The reason `source` is optional. An older export has no locations, and
+        // refusing it over an additive field would defeat the point of having a
+        // minor version.
+        let graph = Graph::parse(
+            r#"{"schema":"1.0","schedule_hash":"h","modules":[],"capabilities":[],
+                "systems":[{"name":"s","phase":"AgentAct","phase_index":7,"module":"m"}],
+                "field_access":[]}"#,
+        )
+        .expect("a 1.0 payload is still readable");
+
+        let html = render(&graph, &layout(&graph), None, None);
+        assert!(html.contains("<!doctype html>"));
+        assert!(
+            !html.contains("class=\"sources\""),
+            "with no locations there should be no source list at all"
+        );
     }
 }

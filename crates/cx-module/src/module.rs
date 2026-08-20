@@ -84,6 +84,43 @@ pub trait Module: 'static {
     fn register(registrar: &mut Registrar);
 }
 
+/// Where in the source a declaration was made (S21).
+///
+/// Captured with `#[track_caller]`, so it is the line of the
+/// `registrar.system(...)` call inside a module's `register` — the place a
+/// reader of the diagram actually wants to open, rather than the internals of
+/// the registrar.
+///
+/// The path is whatever `rustc` was given, which for a workspace build is
+/// relative to the workspace root. That keeps the export portable: two machines
+/// building the same commit emit the same string, so the payload stays
+/// byte-identical and `--baseline` diffing keeps working.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Source {
+    /// Path as the compiler saw it, relative to the workspace root.
+    pub file: &'static str,
+    /// Line of the declaring call.
+    pub line: u32,
+}
+
+impl Source {
+    /// The caller's location.
+    #[track_caller]
+    pub fn here() -> Self {
+        let location = std::panic::Location::caller();
+        Self {
+            file: location.file(),
+            line: location.line(),
+        }
+    }
+}
+
+impl std::fmt::Display for Source {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.file, self.line)
+    }
+}
+
 /// A system a module contributes to the tick.
 pub struct SystemDecl {
     /// Unique within the module. Appears in the schedule hash and the S21 graph.
@@ -92,6 +129,8 @@ pub struct SystemDecl {
     pub phase: Phase,
     /// The module that registered it.
     pub module: ModuleId,
+    /// Where it was declared.
+    pub source: Source,
     install: Box<dyn FnOnce(&mut SimSchedule) + Send + Sync>,
 }
 
@@ -101,6 +140,7 @@ impl std::fmt::Debug for SystemDecl {
             .field("name", &self.name)
             .field("phase", &self.phase)
             .field("module", &self.module)
+            .field("source", &self.source)
             .finish_non_exhaustive()
     }
 }
@@ -153,6 +193,8 @@ pub struct FieldAccess {
     pub field: &'static str,
     /// How it is touched.
     pub access: Access,
+    /// Where the declaration was made.
+    pub source: Source,
 }
 
 /// A dense field a module owns (S06).
@@ -167,6 +209,8 @@ pub struct FieldDecl {
     pub bytes_per_cell: usize,
     /// The module that registered it.
     pub module: ModuleId,
+    /// Where the declaration was made.
+    pub source: Source,
 }
 
 /// Collects a module's registrations.
@@ -186,6 +230,7 @@ impl Registrar {
     ///
     /// The name must be unique within the module: it identifies the system in
     /// the schedule hash, in diagnostics, and in the S21 graph.
+    #[track_caller]
     pub fn system<M>(
         &mut self,
         phase: Phase,
@@ -200,6 +245,7 @@ impl Registrar {
             name,
             phase,
             module,
+            source: Source::here(),
             install: Box::new(move |schedule: &mut SimSchedule| {
                 schedule.add_system(phase, system);
             }),
@@ -212,6 +258,7 @@ impl Registrar {
     /// The declaration is the claim the S21 graph renders; a test cross-checks it
     /// against `bevy_ecs` access metadata where that metadata can attribute an
     /// access, which is what stops the claim from rotting.
+    #[track_caller]
     pub fn access(
         &mut self,
         system: &'static str,
@@ -222,17 +269,20 @@ impl Registrar {
             system,
             field,
             access,
+            source: Source::here(),
         });
         self
     }
 
     /// Declares a dense field this module owns.
+    #[track_caller]
     pub fn field(&mut self, name: &'static str, bytes_per_cell: usize) -> &mut Self {
         let module = self.module.unwrap_or(ModuleId("<unregistered>"));
         self.fields.push(FieldDecl {
             name,
             bytes_per_cell,
             module,
+            source: Source::here(),
         });
         self
     }

@@ -199,3 +199,33 @@ values, which caught the prime being written with one hex digit too many.
   (`ADR-0011` permits exactly two writers, so a third is a defect rather than a change).
   A diff that blocks merges on every legitimate architecture change gets switched off within
   a month, and a check nobody runs is worth less than one that merely reports.
+
+## Source locations (schema 1.1)
+
+Systems and field-access declarations carry `"source": "path:line"`. Captured
+with `#[track_caller]`, so it points at the `registrar.system(...)` call in the
+module's own `register` — not into `cx-module`, which would be the same useless
+line for every system in the engine.
+
+Three properties, each with a test:
+
+- **The schedule hash is unaffected.** The hash is world identity; it goes into
+  saves and replays, and `ADR-0004` makes changing it a migration. Adding a
+  comment above a registration must not invalidate anyone's save.
+- **The path is relative to the workspace root**, because that is what `rustc`
+  is given for a workspace build. Two machines building the same commit emit the
+  same string, so the payload stays byte-identical and `--baseline` diffing keeps
+  working — and no home directory leaks into a CI artifact.
+- **The bump is minor.** Older viewers keep working, which is the entire reason
+  the version has a minor component. `source` is optional on the reading side
+  for the same reason.
+
+The viewer lists locations under each diagram rather than on the blocks: a
+`path:line` does not fit on a 90-pixel isometric face, and putting it there would
+make the diagram unreadable to add information most readers want only
+occasionally.
+
+`--link-prefix` turns them into anchors, using the `#L<line>` form GitHub,
+GitLab, and Gitea all understand. **Off by default**: with no prefix the page
+contains no URL at all, which keeps the self-containment criterion absolute
+rather than approximately true.

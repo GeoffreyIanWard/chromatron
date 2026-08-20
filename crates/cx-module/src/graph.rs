@@ -31,15 +31,19 @@
 
 use std::fmt::Write as _;
 
-use crate::module::Access;
+use crate::module::{Access, Source};
 use crate::resolved::Resolved;
 
 /// Schema version of the exported payload.
 ///
 /// A viewer refuses a payload whose major version it does not know, rather than
 /// rendering a partial diagram and letting someone reason from a picture with
-/// pieces missing.
-pub const SCHEMA_VERSION: &str = "1.0";
+/// pieces missing. A **minor** bump is additive and older viewers keep working,
+/// which is what lets a field be added without rebuilding every consumer in
+/// lockstep.
+///
+/// `1.1` added `source` to systems and field access.
+pub const SCHEMA_VERSION: &str = "1.1";
 
 /// Builds the S21 graph payload for a resolved module set.
 ///
@@ -140,7 +144,7 @@ fn write_capabilities(out: &mut String, resolved: &Resolved) {
 fn write_systems(out: &mut String, resolved: &Resolved) {
     out.push_str("  \"systems\": [\n");
 
-    let mut rows: Vec<(&'static str, usize, &'static str, &'static str)> = Vec::new();
+    let mut rows: Vec<(&'static str, usize, &'static str, &'static str, Source)> = Vec::new();
     for record in resolved.modules() {
         for system in &record.systems {
             rows.push((
@@ -148,13 +152,14 @@ fn write_systems(out: &mut String, resolved: &Resolved) {
                 system.phase.index(),
                 system.phase.name(),
                 record.id.name(),
+                system.source,
             ));
         }
     }
     rows.sort_unstable();
 
     let mut first = true;
-    for (name, phase_index, phase_name, module) in rows {
+    for (name, phase_index, phase_name, module, source) in rows {
         if !first {
             out.push_str(",\n");
         }
@@ -163,7 +168,11 @@ fn write_systems(out: &mut String, resolved: &Resolved) {
         write!(out, "    {{ \"name\": \"{}\", ", escape(name)).ok();
         write!(out, "\"phase\": \"{}\", ", escape(phase_name)).ok();
         write!(out, "\"phase_index\": {phase_index}, ").ok();
-        write!(out, "\"module\": \"{}\" }}", escape(module)).ok();
+        write!(out, "\"module\": \"{}\", ", escape(module)).ok();
+        // Where the registration is, so a reader can open it. The path is
+        // relative to the workspace root, which keeps the payload identical
+        // between machines building the same commit.
+        write!(out, "\"source\": \"{}\" }}", escape(&source.to_string())).ok();
     }
 
     out.push_str("\n  ],\n");
@@ -172,7 +181,13 @@ fn write_systems(out: &mut String, resolved: &Resolved) {
 fn write_field_access(out: &mut String, resolved: &Resolved) {
     out.push_str("  \"field_access\": [\n");
 
-    let mut rows: Vec<(&'static str, &'static str, &'static str, &'static str)> = Vec::new();
+    let mut rows: Vec<(
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+        Source,
+    )> = Vec::new();
     for record in resolved.modules() {
         for access in &record.accesses {
             rows.push((
@@ -180,13 +195,14 @@ fn write_field_access(out: &mut String, resolved: &Resolved) {
                 access.system,
                 access.access.name(),
                 record.id.name(),
+                access.source,
             ));
         }
     }
     rows.sort_unstable();
 
     let mut first = true;
-    for (field, system, access, module) in rows {
+    for (field, system, access, module, source) in rows {
         if !first {
             out.push_str(",\n");
         }
@@ -195,7 +211,10 @@ fn write_field_access(out: &mut String, resolved: &Resolved) {
         write!(out, "    {{ \"field\": \"{}\", ", escape(field)).ok();
         write!(out, "\"system\": \"{}\", ", escape(system)).ok();
         write!(out, "\"access\": \"{}\", ", escape(access)).ok();
-        write!(out, "\"module\": \"{}\" }}", escape(module)).ok();
+        write!(out, "\"module\": \"{}\", ", escape(module)).ok();
+        // The `registrar.access(...)` line, which is where a disputed claim
+        // about who writes a field gets settled.
+        write!(out, "\"source\": \"{}\" }}", escape(&source.to_string())).ok();
     }
 
     out.push_str("\n  ]\n");

@@ -96,6 +96,13 @@ pub struct System {
     pub phase_index: u32,
     /// The module that registered it.
     pub module: String,
+    /// Where it was registered, as `path:line`.
+    ///
+    /// Optional because schema 1.0 did not carry it, and a viewer that refused
+    /// an older payload over an additive field would defeat the point of having
+    /// a minor version at all.
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 /// One system's access to one field.
@@ -109,6 +116,9 @@ pub struct FieldAccess {
     pub access: String,
     /// The module the system belongs to.
     pub module: String,
+    /// Where the access was declared, as `path:line`.
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 impl FieldAccess {
