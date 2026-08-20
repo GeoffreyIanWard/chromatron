@@ -77,6 +77,12 @@ affordable to have both.
   rather than stored. Basin fraction 32.4% to 26.7%; the artifact is much improved but not
   gone, because the gradient is near zero at the continental surface's own ridges. See S07.
 
+- **The grid-bias artifact is resolved.** Four hypotheses were falsified before the cause was
+  found — and the fix was not the world map either, though that helped. Flat resolution's
+  tie-break was smooth in position, so equal-distance contours (straight diagonals on a grid)
+  all drained the same way. It is a coordinate hash now: inside a lake the direction is
+  genuinely arbitrary, and an arbitrary choice leaves no pattern to carve.
+
 ## Notes
 
 **The seam question gets answered here, visually.** Fine erosion detail cannot be perfectly continuous across block boundaries with a finite halo. Rivers should stay coherent because region-level drainage constrains them from above — verify that first, since it is the failure that would actually be noticeable. If hillside detail shows a visible seam, the mitigations in order of preference are a wider halo, fewer iterations with stronger per-iteration effect, or a post-pass seam blend.

@@ -145,7 +145,26 @@ meaning flat — it removes a block's *local* relief and leaves the continental 
 place — so `ElevationGenerator::flat` and `Worldgen::flat` now exist for callers that mean it.
 A fixture asking for flat ground and silently getting a continental slope is a trap.
 
-**The grid-bias artifact, diagnosed.** Eroding bare noise produced a herringbone
+**The grid-bias artifact, resolved.** The herringbone is gone. The fix was neither
+of the two candidates recorded below, and not ridged noise either — ridged noise is
+`1-|2n-1|`, so by the chain rule its gradient is `±2·dn/dx` and it is still flat
+wherever the underlying noise is. It moves the flat spots rather than removing them,
+and *any* smooth field has critical points.
+
+Basins are therefore not eliminable, and should not be: real worlds have endorheic
+basins. What was fixable is the **geometric drainage inside them**. Flat resolution
+ordered cells by `(distance to outlet, distance from higher ground)`, and both terms
+are smooth in position — so every cell of an equal-distance contour, which on a
+regular grid is a straight diagonal line, was sent the same way. That is where the
+parallel combs came from, and erosion carved them.
+
+Inside a filled flat the drainage direction is **genuinely arbitrary**: a lake surface
+has no slope to follow. So the second term is now a hash of the cell's own coordinate.
+That is not an approximation of something better — it is the honest representation of
+a free choice, and unlike a smooth tie-break it leaves no pattern for erosion to find.
+Deterministic per `ADR-0006`, since the hash is a pure function of the coordinate.
+
+**The history, kept.** Eroding bare noise produced a herringbone
 over every hillside and channels in hard 45-degree runs. Three fixes were tried and
 all three failed: splitting the accumulation across downslope neighbours, thermal
 erosion planing the grooves off, and multi-receiver incision. The actual cause is
