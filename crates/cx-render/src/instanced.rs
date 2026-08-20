@@ -37,8 +37,14 @@ use crate::offscreen::{Readback, Rgba};
 /// budgets for instance buffers (1M instances at ~64 B, double-buffered).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct InstanceRaw {
+pub(crate) struct InstanceRaw {
     model: [[f32; 4]; 4],
+    /// Palette row (S12). The mesh supplies the slot.
+    palette: u32,
+    /// To 16 bytes. A vertex attribute's offset is free-form, but keeping the
+    /// stride a multiple of 16 keeps this struct readable from a storage buffer
+    /// by the cull shader without a second layout to reconcile.
+    _pad: [u32; 3],
 }
 
 impl InstanceRaw {
@@ -50,6 +56,8 @@ impl InstanceRaw {
                 instance.position,
             )
             .to_cols_array_2d(),
+            palette: instance.palette,
+            _pad: [0; 3],
         }
     }
 
@@ -65,23 +73,28 @@ impl InstanceRaw {
         attributes: &[
             wgpu::VertexAttribute {
                 offset: 0,
-                shader_location: 2,
-                format: wgpu::VertexFormat::Float32x4,
-            },
-            wgpu::VertexAttribute {
-                offset: 16,
                 shader_location: 3,
                 format: wgpu::VertexFormat::Float32x4,
             },
             wgpu::VertexAttribute {
-                offset: 32,
+                offset: 16,
                 shader_location: 4,
                 format: wgpu::VertexFormat::Float32x4,
             },
             wgpu::VertexAttribute {
-                offset: 48,
+                offset: 32,
                 shader_location: 5,
                 format: wgpu::VertexFormat::Float32x4,
+            },
+            wgpu::VertexAttribute {
+                offset: 48,
+                shader_location: 6,
+                format: wgpu::VertexFormat::Float32x4,
+            },
+            wgpu::VertexAttribute {
+                offset: 64,
+                shader_location: 7,
+                format: wgpu::VertexFormat::Uint32,
             },
         ],
     };
@@ -156,6 +169,7 @@ pub(crate) struct DrawCall<'a> {
 /// validation, so the split between "build once" and "draw many" is the point of
 /// the type.
 pub struct InstancedRenderer {
+    palette: crate::palette::PaletteTexture,
     // The offscreen pipeline. A pipeline is bound to one colour format, and a
     // window's format is not knowable until a window exists — macOS hands out
     // `Bgra8UnormSrgb` where the offscreen target is `Rgba8UnormSrgb` — so the
@@ -315,6 +329,13 @@ impl InstancedRenderer {
         });
 
         let camera_layout = camera_bind_group_layout(device, "cx-render camera layout");
+        let palette_layout = crate::palette::PaletteTexture::layout(device);
+        let palette = crate::palette::PaletteTexture::new(
+            device,
+            render_device.wgpu_queue(),
+            &palette_layout,
+            &crate::palette::Palette::placeholder(),
+        );
 
         let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("cx-render camera bind group"),
@@ -327,7 +348,10 @@ impl InstancedRenderer {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("cx-render pipeline layout"),
-            bind_group_layouts: &[Some(&camera_layout)],
+            // Two groups: the camera, and the shared palette. Every instance of
+            // every mesh uses the same second group, which is what "one bind
+            // group for the vast majority of scene geometry" means (S12).
+            bind_group_layouts: &[Some(&camera_layout), Some(&palette_layout)],
             ..wgpu::PipelineLayoutDescriptor::default()
         });
 
@@ -339,6 +363,7 @@ impl InstancedRenderer {
         );
 
         Ok(Self {
+            palette,
             pipeline,
             shader,
             pipeline_layout,
@@ -438,6 +463,7 @@ impl InstancedRenderer {
             if indirect.is_some() || instance_count > 0 {
                 pass.set_pipeline(pipeline);
                 pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                pass.set_bind_group(1, self.palette.bind_group(), &[]);
                 pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
                 pass.set_vertex_buffer(1, instance_buffer.slice(..));
                 pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
@@ -692,6 +718,7 @@ pub fn instance_at(position: Vec3) -> ExtractedInstance {
         position,
         rotation: Quat::IDENTITY,
         scale: Vec3::ONE,
+        palette: 0,
     }
 }
 
@@ -817,6 +844,7 @@ mod tests {
             position: Vec3::ZERO,
             rotation: Quat::IDENTITY,
             scale: Vec3::splat(2.0),
+            palette: 0,
         });
 
         assert!(small > 0, "the unscaled cube should be visible");

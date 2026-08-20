@@ -25,11 +25,18 @@ struct Cull {
     pad_c: u32,
 };
 
+// Must match `InstanceRaw` byte for byte: the cull pass copies whole instances,
+// so a shorter struct here would copy the matrix and drop the palette row, and
+// every culled instance would silently draw with row 0.
 struct Instance {
     model_0: vec4<f32>,
     model_1: vec4<f32>,
     model_2: vec4<f32>,
     model_3: vec4<f32>,
+    palette: u32,
+    pad_a: u32,
+    pad_b: u32,
+    pad_c: u32,
 };
 
 // Matches wgpu's DrawIndexedIndirectArgs, field for field. A mismatch here is

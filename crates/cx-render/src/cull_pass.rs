@@ -23,7 +23,11 @@ use crate::device::RenderDevice;
 const WORKGROUP: u32 = 64;
 
 /// Bytes of one instance, which must match `InstanceRaw`.
-const INSTANCE_SIZE: u64 = 64;
+///
+/// A model matrix plus the palette row and its padding. Asserted against the
+/// real type below, because a mismatch sizes the compacted buffer wrongly and
+/// the shader writes past its end — corruption rather than a validation error.
+const INSTANCE_SIZE: u64 = 80;
 
 /// The uniform the shader reads: six planes, a count, and padding.
 ///
@@ -378,6 +382,15 @@ mod tests {
         assert_eq!(size_of::<CullUniform>(), 6 * 16 + 4 * 4);
         assert_eq!(size_of::<CullUniform>(), 112);
         assert_eq!(std::mem::offset_of!(CullUniform, instance_count), 96);
+    }
+
+    #[test]
+    fn the_instance_size_matches_the_real_instance() {
+        assert_eq!(
+            INSTANCE_SIZE,
+            size_of::<crate::instanced::InstanceRaw>() as u64,
+            "the compacted buffer would be sized for the wrong stride"
+        );
     }
 
     #[test]

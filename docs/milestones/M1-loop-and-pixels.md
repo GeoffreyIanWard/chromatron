@@ -14,7 +14,7 @@ First frame on screen, and — more importantly — the first proof that the sim
 - `cx-render` using wgpu directly, with the crate boundary enforced by CI (S12, `ADR-0010`).
 - `cx-view`: view world, extract phase, `Transform`/`PreviousTransform` interpolation.
 - ~~`WindowedDriver`~~ **done** — `cx-app`'s windowed driver, with frame pacing, spiral-of-death guard, and pause/step/speed controls (S03).
-- Instanced indirect draw path with a hand-authored palette atlas (the full asset pipeline is M3).
+- ~~Instanced indirect draw path with a hand-authored palette atlas~~ **done** — the full asset pipeline remains M3.
 - ~~GPU frustum culling compute pass~~ **done** — see below.
 - **Debug draw** — lines, spheres, AABBs, OBBs, arrows, crosses: **done**. World-space text landed with the egui overlay, as planned.
 - ~~egui overlay~~ **done** — tick counter, frame graph, time controls, and world-space labels.
@@ -449,6 +449,49 @@ There is a test that the frustum and the projection agree about 2,000 points.
   The padding is three scalars, and the size is asserted in a unit test.
 - **The instance buffer needed `STORAGE` as well as `VERTEX`.** The cull pass
   reads it as storage before the draw reads the compacted output as vertex data.
+
+## The palette atlas
+
+S12's claim is not that a palette produces colours — anything does. It is that
+**one draw call** produces differently coloured objects, because the only thing
+distinguishing them is an integer in the instance buffer. The game's 400-cube
+grid now draws in four colours at **one draw call**, and a test asserts exactly
+that rather than merely that the colours differ.
+
+Two axes, and they are not interchangeable:
+
+| Axis | Comes from | Means |
+|---|---|---|
+| **slot** | the mesh, per vertex | which part of a thing this triangle is — its top, its side |
+| **row** | the instance | which variant of the thing this particular one is |
+
+Collapsing them into one index would mean a mesh could have only one colour, or
+every instance of a mesh the same one. A test draws a single cube and asserts it
+shows more than one colour, which is the check that catches the collapse.
+
+### Looked up, not sampled
+
+`textureLoad` with integer coordinates, no sampler. A palette must never blend
+between entries: filtering across a slot boundary produces a colour in no palette
+at all, and the artefact is a thin seam along a mesh's material edges that
+staring at the texture does not explain.
+
+The texture is `Rgba8Unorm`, not `Rgba8UnormSrgb`. The shader multiplies the
+palette by a lighting term and writes to an sRGB target, which converts on write
+— an sRGB *source* would apply the curve twice and wash every colour out.
+
+### An out-of-range row draws black
+
+WGSL defines `textureLoad` out of range as zero, which is the behaviour worth
+relying on. Clamping into a real entry would make a bad row index invisible; black
+is conspicuous, and there is a test that it stays that way.
+
+### Frames can be dumped
+
+`CX_DUMP_FRAME=<dir> cargo test -p cx-render --test palette` writes each rendered
+frame as a PPM. Pixel assertions say colours differ and come from the palette;
+they cannot say the result *looks* right, and looking at rendered output has
+caught things in this project that reasoning about it did not.
 
 ## Known inefficiency in the frame path
 

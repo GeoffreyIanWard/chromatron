@@ -10,6 +10,8 @@ publish.workspace = true
 # Debug-draw vertices go straight to the GPU as bytes; the derive is what makes
 # that a checked cast rather than a transmute.
 bytemuck.workspace = true
+# Directly, for the `Component` derive, which expands to `bevy_ecs::` paths.
+bevy_ecs.workspace = true
 cx-core.workspace = true
 cx-ecs.workspace = true
 

@@ -1042,6 +1042,7 @@ dependencies = [
 name = "cx-view"
 version = "0.1.0"
 dependencies = [
+ "bevy_ecs",
  "bytemuck",
  "cx-core",
  "cx-ecs",

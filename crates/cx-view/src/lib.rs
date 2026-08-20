@@ -38,8 +38,22 @@ pub mod debug;
 
 pub use debug::{DebugColour, DebugDraw, DebugVertex};
 
+use bevy_ecs::component::Component;
 use cx_core::math::{CHUNK_SIZE, ChunkCoord, Quat, Vec3};
 use cx_ecs::{PreviousTransform, SimWorld, Transform};
+
+/// Which palette row an entity draws with (S12).
+///
+/// Defined here rather than in `cx-ecs` because it is **presentation, not
+/// simulation**: nothing above the firewall reads it, a headless run never looks
+/// at it, and it is deliberately absent from the state hash. An entity without
+/// one draws with row 0.
+///
+/// It still lives on the sim entity, because that is where "which one of these
+/// is this" is known. What would be wrong is `cx-ecs` — the crate every headless
+/// run depends on — carrying a field about colour.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PaletteRow(pub u32);
 
 /// One thing to draw, in renderer-ready form.
 ///
@@ -53,6 +67,13 @@ pub struct ExtractedInstance {
     pub rotation: Quat,
     /// Per-axis scale.
     pub scale: Vec3,
+    /// Which palette row this instance reads (S12).
+    ///
+    /// The instance's half of the palette lookup: the mesh supplies the slot,
+    /// this supplies the row. It is what lets a thousand differently coloured
+    /// objects be one draw call — the only thing that differs between them is
+    /// this integer.
+    pub palette: u32,
 }
 
 /// The derived, disposable presentation state for one frame.
@@ -134,9 +155,12 @@ pub fn extract(world: &mut SimWorld, view: &mut ViewWorld, alpha: f32, origin: C
     view.alpha = alpha.clamp(0.0, 1.0);
     view.origin = origin;
 
-    let mut query = world.query::<(&Transform, &PreviousTransform)>();
+    // `Option<&PaletteRow>` rather than requiring it: an entity without one is
+    // not an error, it is an entity nobody has assigned a colour to yet, and it
+    // draws with row 0.
+    let mut query = world.query::<(&Transform, &PreviousTransform, Option<&PaletteRow>)>();
 
-    for (transform, previous) in query.iter(world.inner()) {
+    for (transform, previous, palette) in query.iter(world.inner()) {
         let blended = previous.0.interpolate(transform, view.alpha);
 
         // Rebase here and only here. The chunk difference is integer, so this
@@ -151,6 +175,7 @@ pub fn extract(world: &mut SimWorld, view: &mut ViewWorld, alpha: f32, origin: C
             position: chunk_offset + blended.position.local,
             rotation: blended.rotation,
             scale: blended.scale,
+            palette: palette.map_or(0, |row| row.0),
         });
     }
 }
@@ -240,6 +265,7 @@ mod tests {
             position: Vec3::ZERO,
             rotation: Quat::IDENTITY,
             scale: Vec3::ONE,
+            palette: 0,
         });
         view.clear();
 

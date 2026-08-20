@@ -487,6 +487,7 @@ mod tests {
             position: Vec3::ZERO,
             rotation: Quat::IDENTITY,
             scale: Vec3::ONE,
+            palette: 0,
         }];
 
         // A clear colour with three distinguishable channels, so a swapped
