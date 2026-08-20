@@ -178,6 +178,22 @@ erosion stages. Recorded because it is the strongest argument yet for building t
 world map before tuning anything else, and because every assertion in the erosion
 modules passes against the biased surface — it took four renders to find.
 
+**Step 5: channel carving.** `cx_worldgen::carve` — the flow network incised into the
+eroded surface with S08's hydraulic geometry, width ∝ Q^0.5 and depth ∝ Q^0.4. Erosion
+produces *valleys*; a river is a metres-wide trench in the floor of one, and at a 2 m
+grid the stream-power term does not resolve that. On a real block: 8 s, 162,192 channel
+cells, 587,587 carved including banks, deepest cut 11.1 m.
+
+Both exponents are well under 1, which is what makes a network look like a network — a
+hundredfold catchment is ten times as wide and six times as deep, not a hundred times
+either, so tributaries stay comparable to their trunk instead of vanishing beside it.
+
+Carving a trench is the obvious way to make water disappear into one, so two things
+prevent it and neither is trusted on its own: depth grows with discharge and discharge
+grows downstream, so a channel bed cannot rise along its own length; and banks are a
+parabolic profile rather than a step, so there is no wall to pond behind. The network is
+rebuilt afterwards and interior sinks are counted — zero, on the fixture and on a block.
+
 **Step 4: thermal erosion.** `cx_worldgen::thermal` — talus-angle relaxation, read-then-write
 so a cell's result cannot depend on sweep order. Mass is conserved and tested as such:
 the failure mode is a stray factor that quietly adds or removes material every round,
@@ -222,9 +238,12 @@ sync between a generation run and a later regeneration of the same block
 the first module with a dependency, and the first entry in S21's field-access
 layer.
 
-Steps 5–9 remain: channel carving, the bake, static field derivation, biome
-assignment, and scatter — plus the world map, which the artifact above makes the
-priority.
+Steps 6–9 remain: the bake, static field derivation, biome assignment, and scatter.
+
+**Whole-pipeline cost so far**: about 130 s single-threaded for steps 1–5 over one block
+(world map, base elevation, fill and routing, 12 erosion rounds, 4 thermal rounds,
+carving). S07's target is 20 s on 8 background threads. Nothing is parallelised yet, and
+erosion's re-routing is the bulk of it — that is where the work goes when it is time.
 
 **The terrain therefore looks smooth, and should.** A plausible-looking
 placeholder would have hidden exactly the difference erosion makes, which is the
