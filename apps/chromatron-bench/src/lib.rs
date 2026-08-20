@@ -35,12 +35,32 @@ pub mod targets {
     pub const FIELD_STENCIL_16M: Duration = Duration::from_millis(12);
     /// `field_halo_exchange_16_chunks` — < 1 ms.
     pub const FIELD_HALO_16_CHUNKS: Duration = Duration::from_millis(1);
-    /// `ecs_spawn_batch_100k_speedup` — >= 1.75x versus a `spawn` loop.
+    /// `ecs_spawn_batch_100k_speedup` — >= 1.4x versus a `spawn` loop.
     ///
-    /// Was 20x, re-baselined against `bevy_ecs` 0.19 where a single spawn costs
-    /// about 24 ns and a batched one about 12 ns. See the baseline-changes note
-    /// in `docs/bench/baselines.md`.
-    pub const SPAWN_BATCH_SPEEDUP: f64 = 1.75;
+    /// A **tripwire, not a performance target.** It exists so that `spawn_batch`
+    /// losing its advantage is noticed, because bulk spawn is the path agent
+    /// spawning and chunk activation depend on. Losing the advantage means a
+    /// ratio near 1.0; the gap between 1.7 and 1.8 is which machine ran it.
+    ///
+    /// The margin is deliberate and was earned the hard way. This was 1.75,
+    /// picked to sit just under a 1.9x figure measured once on a developer
+    /// machine — and 1.75 turned out to be *inside* the range the benchmark
+    /// actually produces:
+    ///
+    /// | Where | Ratio |
+    /// |---|---|
+    /// | Apple M4 Pro, three consecutive runs | 1.749, 1.772, 1.791 |
+    /// | GitHub `ubuntu-latest` | 1.735 |
+    ///
+    /// A threshold inside the spread is a coin flip, and a gate that fails half
+    /// the time is one people learn to rerun rather than read — which is worse
+    /// than no gate, because it also teaches them to rerun the ones that mean
+    /// something.
+    ///
+    /// 1.4 sits about 20% below the lowest observed value, which is room for a
+    /// slower shared runner, and still fails loudly at the ratio that would
+    /// matter.
+    pub const SPAWN_BATCH_SPEEDUP: f64 = 1.4;
     /// `extract_100k_instances` — < 2 ms (S12).
     ///
     /// A frame at 144 fps is 6.9 ms, so this budget is already a third of one.
