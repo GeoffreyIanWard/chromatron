@@ -19,6 +19,13 @@ pub struct Vertex {
     pub position: [f32; 3],
     /// Model-space normal.
     pub normal: [f32; 3],
+    /// Which column of the palette this vertex reads (S12).
+    ///
+    /// A property of the *mesh* — which part of a thing this triangle belongs
+    /// to. The row comes from the instance. Neither can substitute for the
+    /// other: one index alone would mean a mesh could have only one colour, or
+    /// every instance of a mesh the same one.
+    pub palette_slot: u32,
 }
 
 impl Vertex {
@@ -36,6 +43,11 @@ impl Vertex {
                 offset: size_of::<[f32; 3]>() as wgpu::BufferAddress,
                 shader_location: 1,
                 format: wgpu::VertexFormat::Float32x3,
+            },
+            wgpu::VertexAttribute {
+                offset: size_of::<[f32; 6]>() as wgpu::BufferAddress,
+                shader_location: 2,
+                format: wgpu::VertexFormat::Uint32,
             },
         ],
     };
@@ -135,10 +147,24 @@ impl MeshData {
 
         for (normal, corners) in faces {
             let base = vertices.len() as u16;
+
+            // Slot 0 is the top, 2 the underside, 1 everything else. The palette
+            // makes the top lighter and the underside darker, which is what lets
+            // a flat-shaded cube read as a solid object at a glance — the
+            // lighting term alone leaves the vertical faces ambiguous.
+            let palette_slot = if normal.y > 0.5 {
+                0
+            } else if normal.y < -0.5 {
+                2
+            } else {
+                1
+            };
+
             for corner in corners {
                 vertices.push(Vertex {
                     position: [corner.x, corner.y, corner.z],
                     normal: [normal.x, normal.y, normal.z],
+                    palette_slot,
                 });
             }
             // Two triangles per quad, preserving the CCW order above.

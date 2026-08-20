@@ -546,9 +546,17 @@ mod tests {
             "the clear colour is blue-tinted, so a background pixel should be \
              blue-dominant, got {corner:?}"
         );
-        assert_eq!(
-            centre[0], centre[2],
-            "the lit surface is neutral grey, got {centre:?}"
+        // Once the palette landed this stopped being "neutral grey": an entity
+        // with no `PaletteRow` draws with row 0, whose colours are a slightly
+        // cool grey rather than an exactly equal one. What the frame still has
+        // to satisfy is that the surface is far less blue-dominant than the
+        // background — which is the property the assertion was really about.
+        let surface_tint = i32::from(centre[2]) - i32::from(centre[0]);
+        let background_tint = i32::from(corner[2]) - i32::from(corner[0]);
+        assert!(
+            surface_tint < background_tint,
+            "the lit surface should be less blue-tinted than the clear colour: \
+             centre {centre:?}, corner {corner:?}"
         );
     }
 

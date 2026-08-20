@@ -17,7 +17,7 @@
 use cx_app::{FlyCamera, FrameLoop, WindowConfig, run};
 use cx_core::math::{ChunkCoord, Vec3, WorldPos};
 use cx_ecs::{Phase, PreviousTransform, Query, SimSchedule, SimWorld, Transform, WorldConfig};
-use cx_view::DebugColour;
+use cx_view::{DebugColour, PaletteRow};
 
 /// Cubes per side of the placeholder grid.
 const GRID: i32 = 20;
@@ -87,7 +87,13 @@ fn build_world() -> (SimWorld, SimSchedule) {
         let z = (index / GRID - GRID / 2) as f32 * SPACING;
         let transform =
             Transform::from_position(WorldPos::new(ChunkCoord::new(0, 0), Vec3::new(x, 0.0, z)));
-        (transform, PreviousTransform(transform))
+
+        // Four palette rows in a checker, so the grid shows what the atlas is
+        // for: every cube here is one draw call regardless of how many colours
+        // are on screen (S12).
+        let row = ((index % GRID) / 3 + (index / GRID) / 3) as u32 % 4;
+
+        (transform, PreviousTransform(transform), PaletteRow(row))
     }));
 
     let mut schedule = SimSchedule::new();

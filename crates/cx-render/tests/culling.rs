@@ -34,6 +34,7 @@ fn scattered(count: u32) -> Vec<cx_view::ExtractedInstance> {
                 ),
                 rotation: Quat::IDENTITY,
                 scale: Vec3::ONE,
+                palette: 0,
             }
         })
         .collect()
