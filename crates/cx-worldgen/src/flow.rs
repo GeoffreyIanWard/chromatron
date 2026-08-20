@@ -335,19 +335,14 @@ fn push(
 /// Gives filled flats a drainage gradient (Garbrecht & Martz 1997; Barnes 2014).
 ///
 /// A flat is a run of cells at exactly the same height with nowhere lower to go.
-/// Two breadth-first sweeps decide which way water crosses one:
-///
-/// - **Towards the outlet.** Seeded at flat cells that *do* have a lower
-///   neighbour — the places water leaves — and spread inward. A cell far from any
-///   outlet gets a large distance.
-/// - **Away from higher ground.** Seeded at flat cells touching higher terrain —
-///   the places water arrives — and spread inward likewise.
-///
-/// The height added is `(furthest_outlet - to_outlet) + from_higher`. The first
-/// term makes the flat slope towards its outlets; without it there is no
-/// drainage at all. The second makes water entering from the hillside above run
-/// out across the flat rather than hugging its edge, which is the difference
-/// between a delta and a rim channel.
+/// A breadth-first sweep decides which way water crosses one, seeded at the flat
+/// cells that *do* have a lower neighbour — the places water leaves — and spread
+/// inward, so a cell far from any outlet gets a large distance.
+/// The ordering is `(distance to outlet, hash of the coordinate)`. The first
+/// term makes the flat drain towards its outlets, and is monotonic by BFS
+/// construction so no cell can be a local minimum. The second decides between
+/// cells the first ties — see the note on `SECONDARY` for why it is a hash and
+/// not another distance.
 ///
 /// # Why this rather than the one-line alternative
 ///
@@ -412,7 +407,7 @@ fn resolve_flats(filled: &BlockGrid) -> Vec<u32> {
 
     // Two breadth-first sweeps, identical in shape, differing only in what
     // seeds them.
-    let sweep = |towards_outlet: bool| -> Vec<u32> {
+    let sweep = || -> Vec<u32> {
         let mut distance = vec![u32::MAX; CELLS];
         let mut frontier: std::collections::VecDeque<u32> = std::collections::VecDeque::new();
 
@@ -432,11 +427,8 @@ fn resolve_flats(filled: &BlockGrid) -> Vec<u32> {
                 // block there, and off-grid does not register as "lower". A flat
                 // plateau reaching the boundary has no other outlet at all, and
                 // without this every cell of it stays a sink.
-                let mut seeds = towards_outlet
-                    && (cell.x() == 0
-                        || cell.z() == 0
-                        || cell.x() == EDGE - 1
-                        || cell.z() == EDGE - 1);
+                let mut seeds =
+                    cell.x() == 0 || cell.z() == 0 || cell.x() == EDGE - 1 || cell.z() == EDGE - 1;
 
                 for (dx, dz) in NEIGHBOURS {
                     let Some(next) = offset(cell, dx, dz) else {
@@ -445,16 +437,10 @@ fn resolve_flats(filled: &BlockGrid) -> Vec<u32> {
                     let next_index = flat(next);
                     let other = at(next_index);
 
-                    if towards_outlet {
-                        // An outlet: an equal-height neighbour that does have
-                        // somewhere lower to go. That is where water leaves the
-                        // flat, so the flat must slope towards it.
-                        seeds |=
-                            other == height && has_lower.get(next_index).copied().unwrap_or(false);
-                    } else {
-                        // Where water arrives: higher ground draining in.
-                        seeds |= other > height;
-                    }
+                    // An outlet: an equal-height neighbour that does have
+                    // somewhere lower to go. That is where water leaves the
+                    // flat, so the flat must drain towards it.
+                    seeds |= other == height && has_lower.get(next_index).copied().unwrap_or(false);
                 }
 
                 if seeds && let Some(slot) = distance.get_mut(index) {
@@ -500,8 +486,7 @@ fn resolve_flats(filled: &BlockGrid) -> Vec<u32> {
         distance
     };
 
-    let to_outlet = sweep(true);
-    let from_higher = sweep(false);
+    let to_outlet = sweep();
 
     /// How much room the secondary term gets below the primary one.
     ///
@@ -516,21 +501,29 @@ fn resolve_flats(filled: &BlockGrid) -> Vec<u32> {
     /// So outlet distance is the high word and the other is the low word: the
     /// primary ordering keeps its monotonicity, and the secondary only chooses
     /// between cells the primary ties.
-    const SECONDARY: u32 = 4_096;
+    ///
+    /// # The low word is a positional hash, not the from-higher distance
+    ///
+    /// Both are geometric, and that turned out to matter. Cells at the same
+    /// outlet distance form a contour, and on the regular grid those contours are
+    /// straight diagonal lines — so a tie-break that is itself a smooth function
+    /// of position sends every cell of a contour the same way, and drainage
+    /// crosses a lake in parallel combs at 45 degrees. Erosion then carves the
+    /// combs, and that is where the herringbone in an eroded block came from.
+    ///
+    /// Inside a filled flat the drainage direction is **genuinely arbitrary** —
+    /// a lake surface has no slope to follow — so choosing it by a hash of the
+    /// cell's own coordinate is not an approximation of something better. It is
+    /// the honest representation of a free choice, and unlike a geometric
+    /// tie-break it has no pattern for erosion to find.
+    ///
+    /// Deterministic, per `ADR-0006`: the same coordinate hashes the same way in
+    /// every run, so a block still regenerates identically.
+    const SECONDARY: u32 = 256;
 
     // The tie-break field. `u32::MAX` means "not in a flat", which is most of a
     // block — only cells with no lower neighbour at all need one.
     let mut across = vec![u32::MAX; CELLS];
-
-    // The furthest any flat cell is from higher ground. Used to invert that
-    // sweep: a cell *at* the hillside edge must end up high, and one deep inside
-    // the flat low, so the term is a countdown rather than a count.
-    let furthest_from_higher = from_higher
-        .iter()
-        .copied()
-        .filter(|d| *d != u32::MAX)
-        .max()
-        .unwrap_or(0);
 
     for z in 0..EDGE {
         for x in 0..EDGE {
@@ -549,24 +542,19 @@ fn resolve_flats(filled: &BlockGrid) -> Vec<u32> {
                 continue;
             };
 
-            // No higher ground in reach — a plateau with nothing above it.
-            // Treated as maximally distant so this term contributes nothing and
-            // the outlet distance decides alone.
-            let inward = from_higher
-                .get(index)
-                .copied()
-                .filter(|d| *d != u32::MAX)
-                .unwrap_or(furthest_from_higher);
+            // A hash of the cell's own coordinate, in `0..SECONDARY`. Replaces
+            // the distance-from-higher term, which was smooth in position and so
+            // gave every cell of a contour the same answer.
+            let jitter = flat_jitter(cell);
 
             // **Far from the outlet is high; close to incoming hillside is
             // high.** Both terms were inverted in the first attempt, which put a
             // flat's lowest point at its centre — so the centre had no downhill
             // neighbour and stayed a sink.
             //
-            // `furthest_from_higher` is a global maximum across every flat, and
-            // that is fine *because this is only ever compared between cells of
-            // the same flat*: it enters both sides as the same constant and
-            // cancels.
+            // Compared only between cells of the same flat, which is what makes
+            // an arbitrary low word safe: it decides between equals and never
+            // between a cell and its outlet.
             // The `+ 1` is not slack. An outlet — an equal-height neighbour that
             // does have somewhere lower to go — reads as zero above, so a flat
             // cell sitting *at* its outlet would tie with it at zero and the
@@ -579,10 +567,7 @@ fn resolve_flats(filled: &BlockGrid) -> Vec<u32> {
             let potential = outward
                 .saturating_add(1)
                 .saturating_mul(SECONDARY)
-                .saturating_add(u32::from(
-                    u16::try_from((furthest_from_higher - inward).min(SECONDARY - 1))
-                        .unwrap_or(u16::MAX),
-                ));
+                .saturating_add(jitter);
 
             if let Some(slot) = across.get_mut(index) {
                 *slot = potential;
@@ -912,6 +897,21 @@ fn offset(cell: ErosionCell, dx: i32, dz: i32) -> Option<ErosionCell> {
     let x = cell.x().checked_add_signed(dx)?;
     let z = cell.z().checked_add_signed(dz)?;
     ErosionCell::new(x, z)
+}
+
+/// A stable pseudo-random value in `0..SECONDARY`, from a cell's coordinate.
+///
+/// Used to order cells within a flat that are the same distance from an outlet.
+/// Hashed rather than computed, because anything computed from position smoothly
+/// gives neighbouring cells similar answers — and similar answers across a
+/// contour is exactly the parallel-comb pattern this replaced.
+///
+/// A pure function of the coordinate, so `ADR-0006` holds: the same block
+/// regenerates identically, jitter included.
+fn flat_jitter(cell: ErosionCell) -> u32 {
+    let packed = (u64::from(cell.x()) << 32) | u64::from(cell.z());
+    let hash = cx_core::hash::mix64(packed ^ 0x5F27_A1C3_9B4D_0E71);
+    (hash >> 40) as u32 % 256
 }
 
 /// Row-major index. Matches [`BlockGrid`]'s own layout.
