@@ -120,16 +120,27 @@ between them and the timestep becomes a shaping knob rather than a stability
 constraint. A 1,000x timestep flattens the landscape instead of tearing it apart,
 and that is asserted rather than argued.
 
-**Known artifact: D8 grid bias.** Erosion incises towards one receiver and D8
-offers eight, so grooves snap to multiples of 45 degrees and the incision feedback
-compounds the bias over rounds. An eroded block renders with a herringbone texture
-and channels in hard diagonal segments. Flow accumulation was changed to split
-across all downslope neighbours to address it; that improved the channel network
-and left the surface striping unchanged, so the cause is the single-receiver
-incision, not the area term. Thermal erosion (step 4) relaxes over-steep slopes
-and is the next thing to measure against it; multi-receiver incision is the
-fallback. Every assertion in the module passes against the biased surface, which
-is why this is recorded from a render rather than from a test.
+**The grid-bias artifact, diagnosed.** Eroding bare noise produced a herringbone
+over every hillside and channels in hard 45-degree runs. Three fixes were tried and
+all three failed: splitting the accumulation across downslope neighbours, thermal
+erosion planing the grooves off, and multi-receiver incision. The actual cause is
+**filled basins** — base elevation is scale-free noise with no regional drainage,
+so about a third of a block ponds, and flat resolution gives those basins a
+geometric BFS-distance gradient that erosion then carves. With a 40 m/km regional
+tilt the same code on the same seed produces dendritic valleys and no herringbone.
+
+So the fix is the **world map** (M2's first deliverable), not a change to the
+erosion stages. Recorded because it is the strongest argument yet for building the
+world map before tuning anything else, and because every assertion in the erosion
+modules passes against the biased surface — it took four renders to find.
+
+**Step 4: thermal erosion.** `cx_worldgen::thermal` — talus-angle relaxation, read-then-write
+so a cell's result cannot depend on sweep order. Mass is conserved and tested as such:
+the failure mode is a stray factor that quietly adds or removes material every round,
+which looks like nothing until a landscape has inflated. Progress is measured as *excess
+steepness*, not as a count of over-steep cells — the count is not monotonic, because a
+spreading debris apron creates new steep front as fast as the peak behind it settles, and
+asserting on it failed against a surface that was settling correctly.
 
 **Step 2: depression fill and flow routing.** `cx_worldgen::flow` — priority-flood
 filling, D8 direction, and flow accumulation, over a whole block in **3.3 s**
@@ -167,8 +178,9 @@ sync between a generation run and a later regeneration of the same block
 the first module with a dependency, and the first entry in S21's field-access
 layer.
 
-Steps 4–9 remain: thermal erosion, channel carving, the bake, static field
-derivation, biome assignment, and scatter.
+Steps 5–9 remain: channel carving, the bake, static field derivation, biome
+assignment, and scatter — plus the world map, which the artifact above makes the
+priority.
 
 **The terrain therefore looks smooth, and should.** A plausible-looking
 placeholder would have hidden exactly the difference erosion makes, which is the

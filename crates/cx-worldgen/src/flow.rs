@@ -178,6 +178,30 @@ impl FlowNetwork {
             .count()
     }
 
+    /// Calls `visit` for each downslope neighbour with its share of the flow.
+    ///
+    /// The same split [`accumulate`] uses, exposed because erosion needs it:
+    /// incising towards a single receiver is what prints the D8 grid into the
+    /// terrain. Shares sum to one.
+    pub fn for_each_receiver(&self, cell: ErosionCell, visit: impl FnMut(ErosionCell, f32)) {
+        each_receiver(&self.filled, &self.direction, cell, visit);
+    }
+
+    /// Metres from a cell to a specific neighbour.
+    ///
+    /// Diagonals are 1.414 cells away. Stream power divides by this, so treating
+    /// every neighbour as one cell apart makes diagonal reaches incise 41% too
+    /// fast — which is itself a grid artifact.
+    pub fn distance_to(cell: ErosionCell, other: ErosionCell) -> f32 {
+        let dx = other.x() as i32 - cell.x() as i32;
+        let dz = other.z() as i32 - cell.z() as i32;
+        if dx.abs() + dz.abs() == 2 {
+            EROSION_CELL_SIZE * std::f32::consts::SQRT_2
+        } else {
+            EROSION_CELL_SIZE
+        }
+    }
+
     /// Cells in drainage order — everything upstream of a cell comes before it.
     ///
     /// Erosion walks this **backwards**, so a cell is always solved after the

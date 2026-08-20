@@ -51,37 +51,48 @@
 //! change in how concave channel profiles are — worth having eventually, not
 //! worth 26 million Newton iterations a round to get at M2.
 //!
-//! # Known artifact: D8 grid bias in the incised surface
+//! # The grid-bias artifact, and where it actually came from
 //!
-//! Erosion incises each cell towards **one** receiver, and D8 offers only eight
-//! of them. On a smooth surface every groove therefore snaps to a multiple of 45
-//! degrees, and because incision is a feedback — a groove that captures more
-//! cuts deeper, and cutting deeper captures more — the bias compounds over
-//! rounds rather than averaging out. Rendered, an eroded block shows a
-//! herringbone texture over its hillsides and channels running in hard diagonal
-//! and orthogonal segments.
+//! Eroding a block of bare noise produced a herringbone over every hillside and
+//! channels in hard 45-degree runs — terrain that looked like a circuit board.
+//! Three fixes were tried. **All three were wrong**, and they are recorded
+//! because each is the kind of thing that sounds obviously right:
 //!
-//! This is visible and it is not fixed here. What *was* tried: flow accumulation
-//! now splits across every downslope neighbour rather than following D8
-//! ([`crate::flow`]'s `accumulate`), on the theory that the bias entered through
-//! the `A^m` term. It made the channel network noticeably more natural and left
-//! the surface striping essentially unchanged — so the diagnosis was wrong, and
-//! the bias comes from the single-receiver *incision*, not from the area.
+//! 1. **Split the accumulation** across all downslope neighbours instead of
+//!    following D8, on the theory that the bias entered through `A^m`. The
+//!    channel network improved; the surface striping did not change.
+//! 2. **Let thermal erosion plane it off** (step 4) — the grooves exceed the
+//!    talus angle, so relaxation ought to remove them. It moved 12.5 million
+//!    metres of material and the herringbone survived.
+//! 3. **Multi-receiver incision** — lower each cell towards a weighted average
+//!    of its receivers rather than the single steepest, so incision is no longer
+//!    confined to eight rays. No visible change either.
 //!
-//! The honest options from here, in order of preference:
+//! The actual cause is **filled basins**. Base elevation is scale-free fractal
+//! noise with no regional drainage, so roughly a third of a block is closed
+//! basin. Flat resolution gives those basins a BFS-distance gradient, which is
+//! geometric — parallel combs at 45 degrees, visible in the accumulation before
+//! any erosion runs at all. Erosion then carves exactly those combs, and the
+//! feedback amplifies them into the landscape.
 //!
-//! 1. **Thermal erosion (step 4)** relaxes slopes past a talus angle, which is
-//!    exactly what these grooves exceed. It is the next stage and may remove
-//!    most of this as a side effect of doing its own job. Worth measuring before
-//!    building anything more complicated.
-//! 2. **Multi-receiver incision** — lower each cell towards a weighted average
-//!    of its receivers instead of one. The implicit scheme survives it, since a
-//!    convex combination is still bounded by its inputs, but it is a real change
-//!    to the solve.
+//! Confirmed by removing the basins rather than by reasoning: with a regional
+//! tilt of 40 m/km, the same code on the same seed produces dendritic,
+//! organic-looking valleys and **no herringbone at all**.
 //!
-//! Recorded rather than quietly shipped, because every assertion in this module
-//! passes against the biased surface: "channels cut more than hillslopes" is
-//! perfectly true when the channels are straight lines.
+//! So the fix is the **world map** — M2's first deliverable, supplying the
+//! coarse elevation and drainage that make a block drain somewhere instead of
+//! ponding. Not a change to this module. An earlier check had dismissed that
+//! possibility, but it measured *basin fraction* (32% to 17% under tilt) rather
+//! than the artifact, and concluded the wrong thing from the right number.
+//!
+//! None of this was visible in a test. Every assertion here passes against the
+//! biased surface, because "channels cut more than hillslopes" is perfectly true
+//! when the channels are straight lines. It took four renders.
+//!
+//! Incision is multi-receiver regardless — see [`incise`]. It did not fix the
+//! artifact, but with the accumulation already split it is the consistent form,
+//! and splitting the area while confining the incision to one ray is not a
+//! position worth defending.
 //!
 //! # Re-routing
 //!
@@ -195,54 +206,82 @@ pub fn erode(
 }
 
 /// One implicit stream-power solve over the whole grid.
+///
+/// Multi-receiver: a cell is lowered towards a weighted average of **all** the
+/// cells it drains to, not towards the single steepest one. For a cell with
+/// receivers `r_j` carrying shares `w_j`:
+///
+/// ```text
+/// z' = (z + Σ f_j·z_rj') / (1 + Σ f_j),   f_j = dt·K·A^m·w_j / dx_j
+/// ```
+///
+/// Still a convex combination of the cell's old height and its receivers' new
+/// ones, so it is still bounded by them and still unconditionally stable — the
+/// single-receiver form is just this with one term.
+///
+/// # Why it is not the single-receiver form
+///
+/// Because that form prints the grid into the terrain. D8 offers eight
+/// directions, so every groove snaps to a multiple of 45 degrees, and incision
+/// is a feedback: a groove that captures more cuts deeper, which captures more.
+/// Twelve rounds turn a landscape into a herringbone with channels in hard
+/// diagonal runs.
+///
+/// This was built to remove that bias and **did not**. The cause turned out to
+/// be filled basins rather than the incision — see the module docs. It is kept
+/// because the accumulation is already split across receivers, and splitting the
+/// area while confining the incision to a single ray is not a coherent pair.
+///
+/// The receivers are already solved when a cell is reached, because
+/// [`crate::flow::FlowNetwork::drainage_order`] is a topological order over the
+/// same multi-receiver graph the shares come from.
 fn incise(network: &FlowNetwork, settings: ErosionSettings) -> BlockGrid {
     let mut surface = network.filled().clone();
 
-    // Receivers before donors. `drainage_order` is donors-first by
-    // construction, so this walks it backwards — and every cell then reads a
-    // receiver height that has already been updated this round, which is the
-    // whole basis of the implicit scheme.
     for index in network.drainage_order().iter().rev() {
         let Some(cell) = FlowNetwork::cell_at(*index) else {
             continue;
         };
-        let Some(receiver) = network.downstream(cell) else {
-            // An outlet. Held fixed: it is where the block's water leaves, and
-            // lowering it would let the whole block erode away downwards with
-            // nothing to erode *towards*.
-            continue;
-        };
-        let Some(distance) = network.distance_downstream(cell) else {
-            continue;
-        };
 
         let here = surface.get(cell);
-        let there = surface.get(receiver);
 
-        // Already at or below its receiver — inside a filled flat, where there
-        // is no gradient to erode along. Stream power is zero there anyway;
-        // skipping avoids spending the arithmetic to prove it.
-        if here <= there {
+        // Drainage *area*, not cell count: the law is in metres squared, and a
+        // count would tie the result to the erosion grid's resolution, which
+        // `ADR-0015` is free to change.
+        let area = f64::from(network.accumulation(cell))
+            * f64::from(cx_core::math::EROSION_CELL_SIZE).powi(2);
+        let common = f64::from(settings.timestep)
+            * f64::from(settings.erodibility)
+            * area.powf(f64::from(settings.area_exponent));
+
+        let mut weight_sum = 0.0f64;
+        let mut weighted_heights = 0.0f64;
+
+        network.for_each_receiver(cell, |receiver, share| {
+            let there = surface.get(receiver);
+
+            // Nothing to cut towards. Inside a filled flat the receiver is at
+            // the same height, and stream power is zero there anyway.
+            if here <= there {
+                return;
+            }
+
+            let distance = FlowNetwork::distance_to(cell, receiver);
+            let factor = common * f64::from(share) / f64::from(distance);
+
+            weight_sum += factor;
+            weighted_heights += factor * f64::from(there);
+        });
+
+        if weight_sum <= 0.0 {
+            // An outlet, or a cell with nothing below it. Held fixed: the
+            // outlet is where the block's water leaves, and lowering it would
+            // let the whole block erode downwards with nothing to erode
+            // *towards*.
             continue;
         }
 
-        // Drainage *area*, not cell count: the law is in metres squared, and a
-        // count would make the result depend on the erosion grid's resolution.
-        // With `ADR-0015` free to change that resolution, an area keeps the
-        // same landscape at any cell size.
-        let area = f64::from(network.accumulation(cell))
-            * f64::from(cx_core::math::EROSION_CELL_SIZE).powi(2);
-
-        let factor = f64::from(settings.timestep)
-            * f64::from(settings.erodibility)
-            * area.powf(f64::from(settings.area_exponent))
-            / f64::from(distance);
-
-        // The weighted average. `factor` is non-negative, so the result lies
-        // between `there` and `here` however large the timestep is — which is
-        // the unconditional stability, visible in one line.
-        let updated = (f64::from(here) + factor * f64::from(there)) / (1.0 + factor);
-
+        let updated = (f64::from(here) + weighted_heights) / (1.0 + weight_sum);
         surface.set(cell, updated as f32);
     }
 

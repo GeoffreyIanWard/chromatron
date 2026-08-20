@@ -36,9 +36,11 @@ pub mod elevation;
 pub mod flow;
 pub mod hydraulic;
 pub mod module;
+pub mod thermal;
 
 pub use block::{BlockCoordinates, BlockGrid, ErosionCell};
 pub use elevation::{ElevationGenerator, TerrainShape};
 pub use flow::{FlowNetwork, NO_FLOW};
 pub use hydraulic::{ErosionReport, ErosionSettings, erode};
 pub use module::{ELEVATION, UNGENERATED, Worldgen, WorldgenModule, generate_elevation};
+pub use thermal::{ThermalReport, ThermalSettings, relax};
