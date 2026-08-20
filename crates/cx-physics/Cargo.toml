@@ -7,6 +7,14 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+# Directly, not through cx-ecs: the `Component` and `Resource` derives expand to
+# `bevy_ecs::` paths, so the crate has to be nameable here.
+bevy_ecs.workspace = true
+cx-core.workspace = true
+cx-ecs.workspace = true
+cx-fields.workspace = true
+cx-module.workspace = true
+cx-worldgen.workspace = true
 
 [lints]
 workspace = true

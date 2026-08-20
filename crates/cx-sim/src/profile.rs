@@ -7,8 +7,8 @@
 //!
 //! # Why most of these are still thin
 //!
-//! `cx-fields`, `cx-worldgen`, `cx-spatial`, and `cx-agents` are modules; the
-//! solvers and physics register nothing yet. Each fills in as its crate becomes
+//! `cx-fields`, `cx-worldgen`, `cx-spatial`, `cx-agents`, and `cx-physics` are
+//! modules; the solvers register nothing yet. Each fills in as its crate becomes
 //! a module, and the profile names exist now so that the CLI, the gates, and
 //! S20's profile rule have a stable surface to build against.
 //!
@@ -31,6 +31,7 @@
 use cx_agents::AgentsModule;
 use cx_fields::FieldsModule;
 use cx_module::Profile;
+use cx_physics::PhysicsModule;
 use cx_spatial::SpatialModule;
 use cx_worldgen::WorldgenModule;
 
@@ -62,6 +63,7 @@ pub fn full_sim() -> Profile {
         .with::<WorldgenModule>()
         .with::<SpatialModule>()
         .with::<AgentsModule>()
+        .with::<PhysicsModule>()
 }
 
 /// `full-sim` minus the erosion generation stage (S20).
@@ -75,6 +77,7 @@ pub fn no_erosion() -> Profile {
         .with::<WorldgenModule>()
         .with::<SpatialModule>()
         .with::<AgentsModule>()
+        .with::<PhysicsModule>()
 }
 
 /// Everything, including presentation (S20).
@@ -84,6 +87,7 @@ pub fn game() -> Profile {
         .with::<WorldgenModule>()
         .with::<SpatialModule>()
         .with::<AgentsModule>()
+        .with::<PhysicsModule>()
 }
 
 /// A profile by name, or `None` if unknown.

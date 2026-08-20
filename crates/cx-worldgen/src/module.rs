@@ -99,7 +99,10 @@ impl Module for WorldgenModule {
 /// Every registered chunk whose elevation has never been written. "Never
 /// written" is the field's own default sentinel rather than a separate flag: two
 /// records of the same fact drift, and this one cannot.
-fn generate_elevation(mut fields: ResMut<Fields>, worldgen: Res<Worldgen>) {
+///
+/// Public so a caller assembling its own schedule can register the same system
+/// the module does, rather than a copy of it that drifts.
+pub fn generate_elevation(mut fields: ResMut<Fields>, worldgen: Res<Worldgen>) {
     let store = fields.store_mut();
 
     if !store.is_registered(ELEVATION) {

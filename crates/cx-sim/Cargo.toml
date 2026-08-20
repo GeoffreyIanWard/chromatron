@@ -16,6 +16,7 @@ cx-diag.workspace = true
 cx-worldgen.workspace = true
 cx-spatial.workspace = true
 cx-agents.workspace = true
+cx-physics.workspace = true
 
 [lints]
 workspace = true
