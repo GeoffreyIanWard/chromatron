@@ -20,10 +20,16 @@ Two profiles, both enforced in CI **from M0**. The min-spec profile is the bindi
 | Meshes, textures, palette atlases | 1.4 GB | Includes baked terrain meshes (`ADR-0008`) |
 | Render instance buffers | 0.4 GB | 1M instances × ~64 B, double-buffered |
 | Spatial indices | 0.2 GB | Multiple indices, preallocated |
-| Block generation working set | 0.8 GB | One in-flight block at 16,384² with halo; bounded by frontier concurrency |
+| Block generation working set | 0.8 GB | One in-flight block on the **2 m erosion grid**, 5,120² with halo — 0.42 GB measured (`ADR-0015`); bounded by frontier concurrency |
 | Scratch and staging | 0.5 GB | Preallocated per `03-conventions.md` |
 | Audio, UI, misc | 0.2 GB | |
 | Headroom | 0.3 GB | |
+
+The 16,384² figure this line used to carry was the 0.5 m field grid, and it does not fit:
+419 million cells is 6.64 GB across the five fields erosion needs resident, 8.3x this budget.
+`ADR-0015` runs erosion at 2 m instead and resamples at bake, which is 26 million cells and
+0.42 GB — the line above is now achievable rather than aspirational, and it is what sets how
+many blocks the frontier may have in flight.
 
 **Disk, not RAM**: the block cache (S07) holds generated blocks plus baked terrain meshes. It is disposable and not part of the save, but it does grow — budget on the order of 100–200 MB per generated block and cap the cache with LRU eviction.
 

@@ -36,6 +36,33 @@ pub const BLOCK_SIZE: f32 = CHUNK_SIZE * BLOCK_CHUNKS as f32;
 /// Chunks of discarded margin around a generated block (`ADR-0006`).
 pub const GENERATION_HALO_CHUNKS: u32 = 2;
 
+/// Edge length of one **erosion** cell, in metres (`ADR-0015`).
+///
+/// Four times [`CELL_SIZE`], and the distinction is load-bearing. Erosion runs
+/// on this grid; `ELEVATION` is stored on the [`CELL_SIZE`] one, and the bake
+/// resamples between them.
+///
+/// The reason is arithmetic. A block with its halo is 10,240 m square, which at
+/// 0.5 m is 419 million cells and a 6.6 GB working set against a budgeted
+/// 0.8 GB. At 2 m it is 26 million cells and 0.42 GB. Stream-power erosion
+/// describes channels and hillslopes — phenomena tens of metres across — so the
+/// finer grid buys sixteen times the samples per unit area and no additional
+/// information about the process.
+pub const EROSION_CELL_SIZE: f32 = 2.0;
+
+/// Erosion cells along one block edge, excluding the halo.
+pub const EROSION_CELLS_PER_BLOCK_EDGE: u32 = (BLOCK_SIZE / EROSION_CELL_SIZE) as u32;
+
+/// Erosion cells along one block edge, including the halo on both sides.
+///
+/// This squared is the allocation every erosion stage works over, so it is the
+/// number `ADR-0015` is about.
+pub const EROSION_CELLS_PER_BLOCK_EDGE_HALOED: u32 =
+    ((BLOCK_SIZE + 2.0 * GENERATION_HALO_CHUNKS as f32 * CHUNK_SIZE) / EROSION_CELL_SIZE) as u32;
+
+/// Field cells per erosion cell along one axis. The bake's resample ratio.
+pub const CELLS_PER_EROSION_CELL: u32 = (EROSION_CELL_SIZE / CELL_SIZE) as u32;
+
 /// Cells along one tile edge. The tile is the dirty-tracking unit (`ADR-0011`).
 pub const TILE_CELLS: u32 = 64;
 

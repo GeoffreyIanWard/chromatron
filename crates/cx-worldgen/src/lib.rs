@@ -31,8 +31,10 @@
     )
 )]
 
+pub mod block;
 pub mod elevation;
 pub mod module;
 
+pub use block::{BlockCoordinates, BlockGrid, ErosionCell};
 pub use elevation::{ElevationGenerator, TerrainShape};
 pub use module::{ELEVATION, UNGENERATED, Worldgen, WorldgenModule, generate_elevation};
