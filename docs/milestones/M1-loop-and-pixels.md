@@ -26,7 +26,7 @@ First frame on screen, and — more importantly — the first proof that the sim
 
 | Check | Target |
 |---|---|
-| 100,000 instanced meshes at 60 fps | < 20 draw calls |
+| 100,000 instanced meshes at 60 fps | < 20 draw calls — **1**, at **249 fps** on the developer machine; **met** |
 | 30 Hz sim, 144 Hz render, moving instances | 99th-pct frame time < 8 ms, no visible stutter |
 | Extract 100,000 visible instances | < 2 ms |
 | Debug draw 10,000 lines | < 1 ms — **measured 0.21 ms** after pooling, from 1.02 ms before it; see below |
@@ -80,8 +80,41 @@ fail against the original code before being kept.
 |---|---|---|---|
 | `extract_100k_instances` | < 2 ms | 626 µs | 3.2x headroom |
 | `render_100k_instances_fps` — draw-call clause | < 20 | **1** | instancing; runs anywhere |
-| `render_100k_instances_fps` — fps clause | ≥ 60 fps | not measured | needs hardware, see below |
+| `render_100k_instances_fps` — fps clause | ≥ 60 fps | **249 fps** | 4.2x headroom; recorded per device, see below |
 | `frame_time_p99_30hz_sim_144hz_render` | < 8 ms | recorded per device, see below | not gated in CI — see below |
+
+## The fps clause, measured
+
+`crates/cx-app/tests/instance_throughput.rs`. 100,000 instances at 1920x1080, on the
+developer machine (Apple M4 Pro, Metal):
+
+| | |
+|---|---|
+| Median | **249 fps** (4.02 ms) |
+| 99th percentile | **207 fps** (4.84 ms) |
+| Draw calls | **1** |
+| Target | 60 fps — **4.2x headroom** |
+
+Deliberately the worst case: every instance is in front of the camera and the offscreen
+path draws directly rather than through the cull pass, so this is 100,000 instances actually
+rasterized — 1.2 million triangles — not 100,000 submitted and mostly discarded. A number
+that clears 60 fps here is a stronger claim than one that clears it after culling has already
+thrown most of the scene away.
+
+Recorded rather than gated, for the reason set out below that applies to every frame number
+in this milestone. The difference is that submit backpressure is not a *distortion* here — it
+is the measurement. "How many of these frames per second" is a whole-system question and the
+GPU's share of it belongs in the answer.
+
+**A frame rate says nothing unless the frames held the scene.** The measured path has no
+readback, so nothing in the timing itself can tell a fast frame from an empty one — and this
+project has produced several checks that reported success while drawing nothing. So the test
+also renders one frame small enough to read back and asserts the grid covers a fifth of it.
+
+That check earned its place immediately: the first version spaced instances two metres apart
+and covered **13%** of the frame — all 100,000 cubes on screen, but most of the frame empty,
+which measures instance throughput and almost no fill rate. Tightening the spacing to 1.2 m
+took it to 45%. The frame was also rendered and looked at, not just counted.
 
 ## Resolved: how the GPU-dependent gates are measured
 
