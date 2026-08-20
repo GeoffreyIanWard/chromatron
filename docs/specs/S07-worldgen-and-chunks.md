@@ -178,6 +178,34 @@ erosion stages. Recorded because it is the strongest argument yet for building t
 world map before tuning anything else, and because every assertion in the erosion
 modules passes against the biased surface — it took four renders to find.
 
+**Step 6: the bake.** `cx_worldgen::bake` — `ADR-0015`'s other half, finally delivering.
+The eroded 2 m surface is resampled to the 0.5 m `ELEVATION` grid and high-frequency
+detail is added back. Chunks are pure extraction plus interpolation, per `ADR-0006`: a
+chunk computes nothing of its own.
+
+The ADR named a correctness question for each half, and both are now tested:
+
+- *"The resample must not introduce terracing."* Catmull-Rom rather than bilinear.
+  Bilinear is continuous but its derivative is not, so slope jumps at every coarse-cell
+  boundary and a hillshade shows a grid of creases every 2 m.
+- *"The re-added detail must not fill in channels."* Detail amplitude fades to zero as
+  drainage area rises. A channel is 11 m deep and a metre or two wide, so a few metres of
+  noise would erase the river five stages went into carving. It is also physically right:
+  a channel floor is graded by the water on it and is smoother than the slopes above.
+
+**Both tests were weak on the first attempt and were caught by falsifying them**, not by
+review. The crease test used a *planar* fixture — but bilinear reproduces a linear ramp
+exactly and has zero second difference along it, so a plane cannot distinguish the two
+schemes, and the test passed against the artifact it existed to exclude. It uses a curved
+surface now and compares peak curvature against mean, since a C0 interpolant concentrates
+all its curvature at cell boundaries. Bilinear scores 6.3x and fails.
+
+The seam test used an absolute threshold loose enough to admit the detail's own
+amplitude, and passed against a version that sampled detail in chunk-local coordinates —
+a visible seam on every chunk edge in the world. It compares the step across the boundary
+against an ordinary within-chunk cell step now, because a seam is a *discontinuity* and
+only a relative measure asks that. The broken version gives 0.53 m against 0.08 m.
+
 **Step 5: channel carving.** `cx_worldgen::carve` — the flow network incised into the
 eroded surface with S08's hydraulic geometry, width ∝ Q^0.5 and depth ∝ Q^0.4. Erosion
 produces *valleys*; a river is a metres-wide trench in the floor of one, and at a 2 m
@@ -238,7 +266,7 @@ sync between a generation run and a later regeneration of the same block
 the first module with a dependency, and the first entry in S21's field-access
 layer.
 
-Steps 6–9 remain: the bake, static field derivation, biome assignment, and scatter.
+Steps 7–9 remain: static field derivation, biome assignment, and scatter.
 
 **Whole-pipeline cost so far**: about 130 s single-threaded for steps 1–5 over one block
 (world map, base elevation, fill and routing, 12 erosion rounds, 4 thermal rounds,

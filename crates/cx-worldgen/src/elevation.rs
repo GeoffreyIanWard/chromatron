@@ -148,6 +148,11 @@ impl ElevationGenerator {
         self.world
     }
 
+    /// The seed this generator was built with.
+    pub const fn seed(&self) -> u64 {
+        self.seed
+    }
+
     /// The shape this generator was built with.
     pub const fn shape(&self) -> TerrainShape {
         self.shape

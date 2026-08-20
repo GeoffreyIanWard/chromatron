@@ -31,6 +31,7 @@
     )
 )]
 
+pub mod bake;
 pub mod block;
 pub mod carve;
 pub mod elevation;
@@ -40,6 +41,7 @@ pub mod module;
 pub mod thermal;
 pub mod worldmap;
 
+pub use bake::{BakeSettings, ChunkElevation, bake_chunk};
 pub use block::{BlockCoordinates, BlockGrid, ErosionCell};
 pub use carve::{CarveReport, CarveSettings, carve};
 pub use elevation::{ElevationGenerator, TerrainShape};
