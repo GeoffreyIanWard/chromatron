@@ -112,7 +112,7 @@ mod tests {
     use cx_ecs::{SimSchedule, SimWorld, WorldConfig};
     use cx_fields::FieldsModule;
     use cx_module::Registry;
-    use cx_worldgen::{TerrainShape, Worldgen, WorldgenModule};
+    use cx_worldgen::{Worldgen, WorldgenModule};
 
     /// A world with generated terrain and the physics schedule.
     fn physics_world(heights: f32) -> (SimWorld, SimSchedule) {
@@ -121,7 +121,7 @@ mod tests {
         let mut fields = Fields::default();
         fields.store_mut().insert_chunk(ChunkCoord::new(0, 0));
         world.insert_resource(fields);
-        world.insert_resource(Worldgen::new(0, TerrainShape::flat(heights)));
+        world.insert_resource(Worldgen::flat(0, heights));
         world.insert_resource(PhysicsConfig::default());
 
         let mut schedule = SimSchedule::new();
@@ -353,7 +353,7 @@ mod tests {
         let mut fields = Fields::default();
         fields.store_mut().insert_chunk(ChunkCoord::new(0, 0));
         world.insert_resource(fields);
-        world.insert_resource(Worldgen::new(0, TerrainShape::flat(10.0)));
+        world.insert_resource(Worldgen::flat(0, 10.0));
         world.insert_resource(PhysicsConfig::default());
 
         let body = world.spawn((

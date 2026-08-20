@@ -73,6 +73,10 @@ affordable to have both.
   **world map**. That makes the world map the next thing to build rather than a later
   deliverable. See S07.
 
+- **The world map** — `cx_worldgen::worldmap`. Continental elevation and uplift, positional
+  rather than stored. Basin fraction 32.4% to 26.7%; the artifact is much improved but not
+  gone, because the gradient is near zero at the continental surface's own ridges. See S07.
+
 ## Notes
 
 **The seam question gets answered here, visually.** Fine erosion detail cannot be perfectly continuous across block boundaries with a finite halo. Rivers should stay coherent because region-level drainage constrains them from above — verify that first, since it is the failure that would actually be noticeable. If hillside detail shows a visible seam, the mitigations in order of preference are a wider halo, fewer iterations with stronger per-iteration effect, or a post-pass seam blend.

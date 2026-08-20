@@ -54,12 +54,24 @@ fn a_whole_block_generates_and_costs_what_adr_0015_expects() {
     // stages added after this one have something to be compared against.
     let (low, high) = grid.core_range();
     let shape = TerrainShape::default();
+    let world = generator().world().settings();
     println!("block core elevation range: {low:.1} m to {high:.1} m");
 
+    // Against the continental range as well as the block's own. A block sits on
+    // the world map's surface (`S07`), so its absolute heights span the world
+    // map's relief plus its own — asserting only on the block's would fail the
+    // moment continental structure existed, and did.
+    let ceiling = world.base + world.relief + shape.base + shape.relief;
+    let floor = world.base - world.relief + shape.base - shape.relief;
     assert!(
-        low >= shape.base - shape.relief && high <= shape.base + shape.relief,
-        "elevation left the relief it was given: {low} to {high}"
+        low >= floor && high <= ceiling,
+        "elevation left the range the world map and shape allow: {low} to {high}, \
+         against {floor} to {ceiling}"
     );
+
+    // The span should exceed a block's *own* relief, because the continental
+    // surface tilts across 8 km as well. Below the block's own relief would mean
+    // the grid is sampling one place repeatedly.
     assert!(
         high - low > shape.relief * 0.25,
         "a whole block of terrain spanned only {:.1} m, which is flat enough to \

@@ -120,6 +120,31 @@ between them and the timestep becomes a shaping knob rather than a stability
 constraint. A 1,000x timestep flattens the landscape instead of tearing it apart,
 and that is asserted rather than argued.
 
+**The world map.** `cx_worldgen::worldmap` — continental elevation and uplift as very
+long wavelength positional noise (64 km, 1,400 m relief, ~44 m/km typical gradient). Not a
+stored grid: the world is effectively infinite, so there is no array to hold and no global
+drainage to route across it. What the pipeline actually needs is that a block has somewhere
+downhill to send its water, and a regional gradient several times block-scale relief supplies
+that everywhere at once.
+
+Built out of order because the grid-bias artifact below made it the priority. It **helps but
+does not fully resolve it**: filled basin drops from 32.4% to 26.7% of a block, and the
+rendered terrain is dendritic over much of its area with striped patches remaining. The
+reason is that a *typical* gradient of 44 m/km is near zero at the continental surface's own
+ridges and troughs, and those flat zones pond exactly as before. The lever is the **minimum**
+gradient, not the typical one — ridged noise, which has no flat tops, is the obvious next
+thing to try.
+
+`WorldMapSettings::typical_gradient` exists so the tuning trade is a number rather than an
+impression, and it is gated: the default must clear the 40 m/km that was measured to remove
+the artifact.
+
+Adding the world map broke three tests that had assumed terrain sat near zero, and each
+needed its claim restated rather than its threshold widened. `TerrainShape::flat` also stopped
+meaning flat — it removes a block's *local* relief and leaves the continental surface in
+place — so `ElevationGenerator::flat` and `Worldgen::flat` now exist for callers that mean it.
+A fixture asking for flat ground and silently getting a continental slope is a trap.
+
 **The grid-bias artifact, diagnosed.** Eroding bare noise produced a herringbone
 over every hillside and channels in hard 45-degree runs. Three fixes were tried and
 all three failed: splitting the accumulation across downslope neighbours, thermal

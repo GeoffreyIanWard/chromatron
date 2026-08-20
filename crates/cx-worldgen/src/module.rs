@@ -45,6 +45,16 @@ impl Worldgen {
         }
     }
 
+    /// A generator producing genuinely flat terrain at `height`.
+    ///
+    /// See [`ElevationGenerator::flat`]: a flat [`TerrainShape`] alone leaves
+    /// the continental surface in place.
+    pub const fn flat(seed: u64, height: f32) -> Self {
+        Self {
+            generator: ElevationGenerator::flat(seed, height),
+        }
+    }
+
     /// The elevation generator.
     pub const fn generator(&self) -> &ElevationGenerator {
         &self.generator
