@@ -40,7 +40,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install toolchain
         run: rustup show # honours rust-toolchain.toml
-      - run: cargo test -p ci-checks --test firewall
+      - run: cargo test --locked -p ci-checks --test firewall
 
   check:
     name: fmt, clippy, test
@@ -113,8 +113,17 @@ jobs:
             install
           fi
 
+      # `--locked` on every cargo command that resolves dependencies. Without
+      # it, cargo is free to update `Cargo.lock` mid-build and pull a version
+      # nobody reviewed — which is exactly how the 2026-08-20 crates.io incident
+      # propagated: `arrayref` was republished as 0.3.10 depending on a malicious
+      # `proc-macro1`, and any resolve during its 86 minutes online would have
+      # taken it. With `--locked`, a build that would change the lockfile fails
+      # instead of succeeding quietly.
+      #
+      # `cargo fmt` resolves nothing, so it does not take the flag.
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets
+      - run: cargo clippy --locked --workspace --all-targets
       - name: Test
         # A missing adapter fails rather than skips. Renderer tests skip when
         # there is no GPU so a bare container stays usable, and cargo swallows a
@@ -122,7 +131,7 @@ jobs:
         # one that rendered nothing at all.
         env:
           CX_REQUIRE_GPU: '1'
-        run: cargo test --workspace
+        run: cargo test --locked --workspace
 
       # Numbers that are recorded rather than gated — frame cost, debug-draw
       # cost, adapter names — are printed by tests that pass, and cargo swallows
@@ -137,9 +146,9 @@ jobs:
         env:
           CX_REQUIRE_GPU: '1'
         run: |
-          cargo test -p cx-app --test frame_cost -- --nocapture
-          cargo test -p cx-app --test debug_draw -- --nocapture
-          cargo test -p cx-render --test draw_calls -- --nocapture
+          cargo test --locked -p cx-app --test frame_cost -- --nocapture
+          cargo test --locked -p cx-app --test debug_draw -- --nocapture
+          cargo test --locked -p cx-render --test draw_calls -- --nocapture
 
   # S21's graph diff annotates rather than blocking — a check that fails every
   # legitimate architecture change gets switched off within a month. The one
@@ -161,8 +170,8 @@ jobs:
       - name: Export and render
         run: |
           set -euo pipefail
-          cargo run -q -p chromatron-cli -- graph --profile full-sim --out graph.json
-          cargo run -q -p graph-viewer -- --graph graph.json --out graph.html --strict
+          cargo run --locked -q -p chromatron-cli -- graph --profile full-sim --out graph.json
+          cargo run --locked -q -p graph-viewer -- --graph graph.json --out graph.html --strict
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: architecture-graph
@@ -188,14 +197,14 @@ jobs:
         run: |
           features=""
           for f in m0-ecs m0-fields m0-module; do
-            if cargo check -p chromatron-bench --features "$f" --benches >/dev/null 2>&1; then
+            if cargo check --locked -p chromatron-bench --features "$f" --benches >/dev/null 2>&1; then
               features="${features:+$features,}$f"
             else
               echo "::notice::$f not yet implemented; its gate is skipped"
             fi
           done
           if [ -n "$features" ]; then
-            cargo bench -p chromatron-bench --features "$features"
+            cargo bench --locked -p chromatron-bench --features "$features"
           else
             echo "no M0 gates enabled yet"
           fi
