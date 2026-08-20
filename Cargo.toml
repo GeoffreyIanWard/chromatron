@@ -31,6 +31,7 @@ members = [
     "apps/chromatron-bench",
     # ---- repo tooling ----
     "tools/ci-checks",
+    "tools/graph-viewer",
 ]
 
 [workspace.package]

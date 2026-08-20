@@ -1499,6 +1499,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "graph-viewer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "guillotiere"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

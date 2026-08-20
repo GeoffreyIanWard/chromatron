@@ -1,7 +1,7 @@
 ---
 id: S21
 title: Architecture Graph & Isometric Viewer
-status: partial (export at M0; viewer at M1)
+status: implemented (export at M0; viewer at M2)
 depends_on: [S02, S06, S14, S20]
 provides: [graph-export, graph-schema, isometric-viewer, graph-diff]
 crates_touched: [cx-module, cx-ecs, cx-fields, cx-diag, chromatron-cli]
@@ -130,7 +130,38 @@ Two consequences of decisions made while building it:
 - **The export lives in `cx-module`, not `cx-diag`.** It serializes that crate's own resolved
   state, so keeping them together means they cannot drift apart across a crate boundary.
 
-Still M1: the isometric viewer, stable layout, and the rendered diff.
+**The viewer is implemented**, in `tools/graph-viewer`: three layers, stable layout, the
+rendered diff, and a `--strict` mode that fails on the `ELEVATION` writer limit. CI exports
+`full-sim`, renders it, and uploads the page as an artifact.
+
+### One interpretation worth recording
+
+"Layout is computed in the viewer, not the engine" is satisfied by computing it in
+`tools/graph-viewer` — a repo tool that ships in nothing and is on neither side of the
+firewall — rather than in the page's script. The engine's export stays layout-free, which is
+what the rule protects.
+
+The reason to prefer Rust over JavaScript here is that S21 makes layout stability an
+**acceptance criterion**, and a criterion that cannot be tested is a hope. The page draws
+positions it is handed and computes none.
+
+### Placement derives from structure
+
+Modules are placed by a hash of their id, so adding one leaves every other module exactly
+where it was — the requirement that rules out sorting them into rows, which is equally
+stable across runs and moves everything after an insertion.
+
+Capabilities sit **directly below their provider**. The first version hashed a capability's
+own name, which satisfied stability and made the most common edge on the layer a long
+diagonal across the whole picture. Both facts were discovered by rendering the real graph
+and looking at it, not by reasoning about it.
+
+### The hash is written out, and pinned
+
+`DefaultHasher` explicitly does not promise the same output across Rust releases, so a
+layout built on it would reshuffle on a toolchain upgrade — a diagram changing with no
+change to the engine. FNV-1a is written out here and pinned by a test against the published
+values, which caught the prime being written with one hex digit too many.
 
 ## Acceptance criteria
 
