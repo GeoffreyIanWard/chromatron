@@ -15,7 +15,7 @@ First frame on screen, and — more importantly — the first proof that the sim
 - `cx-view`: view world, extract phase, `Transform`/`PreviousTransform` interpolation.
 - ~~`WindowedDriver`~~ **done** — `cx-app`'s windowed driver, with frame pacing, spiral-of-death guard, and pause/step/speed controls (S03).
 - Instanced indirect draw path with a hand-authored palette atlas (the full asset pipeline is M3).
-- GPU frustum culling compute pass.
+- ~~GPU frustum culling compute pass~~ **done** — see below.
 - **Debug draw** — lines, spheres, AABBs, OBBs, arrows, crosses: **done**. World-space text landed with the egui overlay, as planned.
 - ~~egui overlay~~ **done** — tick counter, frame graph, time controls, and world-space labels.
 - ~~Free-fly camera~~ **done** — `cx-app::flycam`, with the floating origin following it.
@@ -404,6 +404,51 @@ not stay occluded on demand. It has now been seen working: **54 fps occluded,
 The unit test was not wrong; it tested one of the two things that had to be true.
 The missing half — that no frame is requested before the deadline — is now tested
 too.
+
+## GPU frustum culling
+
+A compute pass compacts the visible instances into a second buffer and fills in
+an indirect draw's instance count as it goes. **The count never comes back to the
+CPU**: the atomic that decides where an instance lands is the same word the draw
+call reads, so nothing has to reconcile them, and there is no synchronisation
+point in the middle of the frame.
+
+The windowed path culls; the offscreen path draws directly. That is deliberate —
+the offscreen tests put the whole scene in view on purpose, and a compute
+dispatch there would add something else to go wrong between a queued instance and
+an asserted pixel.
+
+### The six inequalities exist twice, and that is checked
+
+One copy has to run on each processor, so the duplication is unavoidable. What
+matters is that a disagreement is caught: a test runs `cx_render::culling` and
+`shaders/cull.wgsl` over the same 4,096 instances from **five camera positions**
+and compares the counts. One position could agree by luck — a shader ignoring the
+top plane still matches a camera whose scene sits below it.
+
+A control test asserts culling actually *removes* something, because the
+comparison above would pass just as well if both sides kept everything.
+
+### Planes from the matrix, not from the camera
+
+Gribb–Hartmann extraction from the view-projection matrix, rather than
+reconstructing corners from field of view and aspect. The matrix that culls is
+then the matrix that projects, so an error in the aspect ratio moves both
+together instead of culling things that would have been on screen. It also means
+the `0..1` depth convention is already accounted for — the near-plane row differs
+from OpenGL's `-1..1`, and getting it wrong clips everything nearer than half the
+far plane, which reads as a draw-distance bug.
+
+There is a test that the frustum and the projection agree about 2,000 points.
+
+### Two layout traps, one of which cost a debugging session
+
+- **`vec3<u32>` aligns to 16 in WGSL.** Padding the uniform with one would have
+  put the struct at 128 bytes against Rust's 112. wgpu catches it — "bound with
+  size 112 where the shader expects 128" — but only once something dispatches.
+  The padding is three scalars, and the size is asserted in a unit test.
+- **The instance buffer needed `STORAGE` as well as `VERTEX`.** The cull pass
+  reads it as storage before the draw reads the compacted output as vertex data.
 
 ## Known inefficiency in the frame path
 

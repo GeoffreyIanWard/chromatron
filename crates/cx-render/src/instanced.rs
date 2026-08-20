@@ -135,7 +135,16 @@ pub(crate) struct DrawCall<'a> {
     /// Per-instance model matrices, already uploaded.
     pub instance_buffer: &'a wgpu::Buffer,
     /// How many instances to draw.
+    ///
+    /// Ignored when `indirect` is set: the GPU decides the count, which is the
+    /// point of culling on it.
     pub instance_count: u32,
+    /// Indirect arguments, when the count comes from a cull pass.
+    ///
+    /// `None` draws `instance_count` directly. That path is still used by the
+    /// offscreen tests, where the whole scene is deliberately in view and a
+    /// compute dispatch would only add something else to go wrong.
+    pub indirect: Option<&'a wgpu::Buffer>,
     /// Colour to clear to first.
     pub clear: Rgba,
 }
@@ -341,6 +350,11 @@ impl InstancedRenderer {
         })
     }
 
+    /// Indices in the mesh, for an indirect draw's arguments.
+    pub(crate) const fn index_count(&self) -> u32 {
+        self.index_count
+    }
+
     /// A pipeline for a target of `format`, for callers that do not draw
     /// offscreen.
     pub(crate) fn pipeline_for(
@@ -365,6 +379,7 @@ impl InstancedRenderer {
     ) -> DrawStats {
         let DrawCall {
             pipeline,
+            indirect,
             target,
             depth,
             width,
@@ -416,13 +431,21 @@ impl InstancedRenderer {
                 ..wgpu::RenderPassDescriptor::default()
             });
 
-            if instance_count > 0 {
+            // An indirect draw is issued even when the CPU-side count is zero:
+            // the GPU owns the real count, and skipping the call because the
+            // *input* was empty would be a different question than the one that
+            // matters. A direct draw with nothing to draw is still skipped.
+            if indirect.is_some() || instance_count > 0 {
                 pass.set_pipeline(pipeline);
                 pass.set_bind_group(0, &self.camera_bind_group, &[]);
                 pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
                 pass.set_vertex_buffer(1, instance_buffer.slice(..));
                 pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-                pass.draw_indexed(0..self.index_count, 0, 0..instance_count);
+
+                match indirect {
+                    Some(args) => pass.draw_indexed_indirect(args, 0),
+                    None => pass.draw_indexed(0..self.index_count, 0, 0..instance_count),
+                }
                 draw_calls = 1;
             }
         }
@@ -453,7 +476,11 @@ impl InstancedRenderer {
         device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("cx-render instances"),
             contents: bytes,
-            usage: wgpu::BufferUsages::VERTEX,
+            // STORAGE as well as VERTEX: the cull pass reads this buffer as
+            // storage before the draw reads the compacted result as vertex
+            // data. Without it, binding it to the compute shader is a
+            // validation error rather than anything subtle.
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE,
         })
     }
 
@@ -552,6 +579,7 @@ impl InstancedRenderer {
                 camera,
                 instance_buffer: &instance_buffer,
                 instance_count: contents.instances.len() as u32,
+                indirect: None,
                 clear,
             },
         );

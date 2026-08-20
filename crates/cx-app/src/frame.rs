@@ -95,7 +95,10 @@ impl FrameLoop {
         instance_capacity: usize,
     ) -> Result<Self, RenderError> {
         let device = RenderDevice::headless()?;
-        let renderer = FrameRenderer::new(&device, &MeshData::unit_cube())?;
+        // The culling pass is sized here for the same reason the view world is:
+        // both are fixed at startup so nothing grows during a frame.
+        let renderer =
+            FrameRenderer::new(&device, &MeshData::unit_cube(), instance_capacity as u32)?;
 
         Ok(Self {
             device,

@@ -26,6 +26,8 @@
 //! being handled.
 
 pub mod camera;
+pub mod cull_pass;
+pub mod culling;
 pub mod debug;
 pub mod device;
 pub mod error;
@@ -38,6 +40,8 @@ pub mod testing;
 pub mod ui;
 
 pub use camera::Camera;
+pub use cull_pass::CullPass;
+pub use culling::{Frustum, Plane};
 pub use debug::{DebugRenderer, DebugStats};
 pub use device::{Backend, DeviceInfo, DeviceKind, RenderDevice};
 pub use error::RenderError;
