@@ -35,4 +35,4 @@ pub mod elevation;
 pub mod module;
 
 pub use elevation::{ElevationGenerator, TerrainShape};
-pub use module::{ELEVATION, UNGENERATED, Worldgen, WorldgenModule};
+pub use module::{ELEVATION, UNGENERATED, Worldgen, WorldgenModule, generate_elevation};

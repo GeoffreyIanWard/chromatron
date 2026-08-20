@@ -958,6 +958,14 @@ version = "0.1.0"
 [[package]]
 name = "cx-physics"
 version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "cx-core",
+ "cx-ecs",
+ "cx-fields",
+ "cx-module",
+ "cx-worldgen",
+]
 
 [[package]]
 name = "cx-present"
@@ -989,6 +997,7 @@ dependencies = [
  "cx-ecs",
  "cx-fields",
  "cx-module",
+ "cx-physics",
  "cx-spatial",
  "cx-time",
  "cx-worldgen",
