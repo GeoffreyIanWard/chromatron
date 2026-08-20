@@ -67,6 +67,32 @@ pub struct CullPass {
     draw_args: wgpu::Buffer,
     /// How many instances `visible` can hold.
     capacity: u32,
+    /// The bind group, and the instance-buffer generation it was built against.
+    ///
+    /// Three of the four bindings are this pass's own buffers and never change.
+    /// The fourth is the instance buffer, which the pool replaces only when it
+    /// grows — so the generation is exactly the condition under which this has
+    /// to be rebuilt.
+    bind_group: Option<(u64, wgpu::BindGroup)>,
+    creations: u32,
+}
+
+/// What the cull pass reads for one frame.
+///
+/// A struct because the alternative is seven positional parameters, two of them
+/// adjacent `u32`s that mean entirely different things.
+pub(crate) struct CullInputs<'a> {
+    /// The full instance set, as a storage buffer.
+    pub instances: &'a wgpu::Buffer,
+    /// Which buffer that is, for the bind-group cache. See
+    /// [`crate::instanced::InstancedRenderer::instance_generation`].
+    pub generation: u64,
+    /// How many instances it holds.
+    pub count: u32,
+    /// Indices per instance, for the indirect arguments.
+    pub index_count: u32,
+    /// The volume to test against.
+    pub frustum: Frustum,
 }
 
 impl std::fmt::Debug for CullPass {
@@ -146,6 +172,8 @@ impl CullPass {
             visible,
             draw_args,
             capacity,
+            bind_group: None,
+            creations: 0,
         }
     }
 
@@ -171,14 +199,18 @@ impl CullPass {
     /// touches the instance count.
     ///
     pub(crate) fn encode(
-        &self,
+        &mut self,
         device: &RenderDevice,
         encoder: &mut wgpu::CommandEncoder,
-        instances: &wgpu::Buffer,
-        count: u32,
-        index_count: u32,
-        frustum: Frustum,
+        inputs: CullInputs<'_>,
     ) -> u32 {
+        let CullInputs {
+            instances,
+            generation,
+            count,
+            index_count,
+            frustum,
+        } = inputs;
         let queue = device.wgpu_queue();
 
         // More instances than the buffer can hold would let the shader write
@@ -212,30 +244,45 @@ impl CullPass {
             }),
         );
 
-        let bind_group = device
-            .wgpu_device()
-            .create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("cx-render cull bind group"),
-                layout: &self.layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: self.uniform.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: instances.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: self.visible.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: self.draw_args.as_entire_binding(),
-                    },
-                ],
-            });
+        // Rebuilt only when the instance buffer underneath it has been
+        // replaced. A bind group holds the buffer it was built against, so
+        // rewriting that buffer's contents — which is what every frame does —
+        // leaves this one valid.
+        if self
+            .bind_group
+            .as_ref()
+            .is_none_or(|(at, _)| *at != generation)
+        {
+            self.bind_group = Some((
+                generation,
+                device
+                    .wgpu_device()
+                    .create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("cx-render cull bind group"),
+                        layout: &self.layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: self.uniform.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: instances.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 2,
+                                resource: self.visible.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 3,
+                                resource: self.draw_args.as_entire_binding(),
+                            },
+                        ],
+                    }),
+            ));
+            self.creations += 1;
+        }
+        let (_, bind_group) = self.bind_group.as_ref().expect("just built");
 
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -243,13 +290,19 @@ impl CullPass {
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
+            pass.set_bind_group(0, bind_group, &[]);
             // Rounded up, which is why the shader bounds-checks: the last group
             // is almost always partly past the end.
             pass.dispatch_workgroups(count.div_ceil(WORKGROUP), 1, 1);
         }
 
         count
+    }
+
+    /// Bind groups built since construction. See
+    /// [`crate::frame::FrameRenderer::creations`].
+    pub(crate) const fn creations(&self) -> u32 {
+        self.creations
     }
 
     /// Culls `instances` and reports how many survived.
@@ -263,14 +316,17 @@ impl CullPass {
     /// can drive the real path without this crate exposing a device or a queue
     /// in a public signature, which `ADR-0010` keeps out of its API.
     pub fn debug_cull_count(
-        &self,
+        &mut self,
         device: &RenderDevice,
-        renderer: &crate::instanced::InstancedRenderer,
+        renderer: &mut crate::instanced::InstancedRenderer,
         camera: &crate::camera::Camera,
         aspect: f32,
         instances: &[cx_view::ExtractedInstance],
     ) -> u32 {
-        let buffer = renderer.upload_instances(device.wgpu_device(), instances);
+        renderer.upload_instances(device.wgpu_device(), device.wgpu_queue(), instances);
+        let buffer = renderer
+            .instance_buffer()
+            .expect("an upload always leaves a buffer");
 
         let mut encoder =
             device
@@ -280,13 +336,17 @@ impl CullPass {
                 });
 
         let frustum = Frustum::from_view_projection(camera.view_projection(aspect));
+        let generation = renderer.instance_generation();
         self.encode(
             device,
             &mut encoder,
-            &buffer,
-            instances.len() as u32,
-            renderer.index_count(),
-            frustum,
+            CullInputs {
+                instances: &buffer,
+                generation,
+                count: instances.len() as u32,
+                index_count: renderer.index_count(),
+                frustum,
+            },
         );
         device
             .wgpu_queue()
@@ -371,6 +431,57 @@ fn storage_entry(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The bind group survives a frame, and does not survive a reallocation.
+    ///
+    /// This one is here rather than in `tests/pooling.rs` because the offscreen
+    /// path draws directly — the cull pass only runs in a real frame, which
+    /// needs a window, or through `debug_cull_count`, which is this crate's own.
+    #[test]
+    fn the_bind_group_outlives_the_frame_but_not_the_buffer() {
+        use cx_core::math::{Quat, Vec3};
+
+        let Some(device) = crate::testing::device_or_skip() else {
+            return;
+        };
+
+        let mut renderer =
+            crate::instanced::InstancedRenderer::new(&device, &crate::mesh::MeshData::unit_cube())
+                .expect("the unit cube is a valid mesh");
+        let mut pass = CullPass::new(&device, 100_000);
+        let camera = crate::camera::Camera::looking_at(Vec3::new(0.0, 2.0, 20.0), Vec3::ZERO);
+
+        let instance = |index: usize| cx_view::ExtractedInstance {
+            position: Vec3::new(index as f32 * 0.01, 0.0, 0.0),
+            rotation: Quat::IDENTITY,
+            scale: Vec3::ONE,
+            palette: 0,
+        };
+
+        let few: Vec<_> = (0..16).map(instance).collect();
+        pass.debug_cull_count(&device, &mut renderer, &camera, 1.0, &few);
+        let baseline = pass.creations();
+        assert_eq!(baseline, 1, "the first frame builds exactly one bind group");
+
+        for _ in 0..5 {
+            pass.debug_cull_count(&device, &mut renderer, &camera, 1.0, &few);
+        }
+        assert_eq!(
+            pass.creations(),
+            baseline,
+            "a bind group was rebuilt for a buffer that had not changed"
+        );
+
+        // A bind group holds the buffer it was built against. Reusing this one
+        // after the pool has replaced that buffer would cull last frame's
+        // instances, which is a wrong picture rather than an error.
+        let many: Vec<_> = (0..50_000).map(instance).collect();
+        pass.debug_cull_count(&device, &mut renderer, &camera, 1.0, &many);
+        assert!(
+            pass.creations() > baseline,
+            "the instance buffer grew and the stale bind group was kept"
+        );
+    }
 
     #[test]
     fn the_uniform_layout_matches_what_wgsl_expects() {

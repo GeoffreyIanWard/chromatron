@@ -36,6 +36,7 @@ pub mod instanced;
 pub mod mesh;
 pub mod offscreen;
 pub mod palette;
+mod pool;
 pub mod surface;
 pub mod testing;
 pub mod ui;

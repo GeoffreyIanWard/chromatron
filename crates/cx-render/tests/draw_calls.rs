@@ -31,7 +31,7 @@ fn one_hundred_thousand_instances_stay_under_the_draw_call_ceiling() {
         return;
     };
 
-    let renderer = InstancedRenderer::new(&device, &MeshData::unit_cube())
+    let mut renderer = InstancedRenderer::new(&device, &MeshData::unit_cube())
         .expect("the cube pipeline should build");
 
     // Spread over a grid so this is not a degenerate case where every instance

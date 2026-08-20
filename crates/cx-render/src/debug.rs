@@ -51,6 +51,8 @@ pub(crate) struct DebugPass<'a> {
 
 /// Draws line lists.
 pub struct DebugRenderer {
+    /// Reused between frames — see [`crate::pool`].
+    vertices: crate::pool::GrowableBuffer,
     pipeline: wgpu::RenderPipeline,
     shader: wgpu::ShaderModule,
     pipeline_layout: wgpu::PipelineLayout,
@@ -127,6 +129,10 @@ impl DebugRenderer {
         let pipeline = build_pipeline(device, &shader, &pipeline_layout, format);
 
         Self {
+            vertices: crate::pool::GrowableBuffer::new(
+                "cx-render debug vertices",
+                wgpu::BufferUsages::VERTEX,
+            ),
             pipeline,
             shader,
             pipeline_layout,
@@ -145,15 +151,30 @@ impl DebugRenderer {
         build_pipeline(device, &self.shader, &self.pipeline_layout, format)
     }
 
-    /// Uploads vertices for one frame.
-    pub(crate) fn upload(&self, device: &wgpu::Device, vertices: &[DebugVertex]) -> wgpu::Buffer {
-        use wgpu::util::DeviceExt;
+    /// Uploads vertices for one frame into the pooled buffer.
+    ///
+    /// The *mutate* half; [`Self::vertex_buffer`] reads the result back. Debug
+    /// draw is off most of the time, so the pool stays unallocated until the
+    /// first frame that actually has lines.
+    pub(crate) fn upload(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        vertices: &[DebugVertex],
+    ) {
+        self.vertices
+            .write(device, queue, bytemuck::cast_slice(vertices));
+    }
 
-        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("cx-render debug vertices"),
-            contents: bytemuck::cast_slice(vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        })
+    /// The pooled vertex buffer, after an upload. A clone: see
+    /// [`crate::pool::TargetPool::get`].
+    pub(crate) fn vertex_buffer(&self) -> Option<wgpu::Buffer> {
+        self.vertices.get().cloned()
+    }
+
+    /// GPU resources this renderer's frame path has created since construction.
+    pub(crate) const fn creations(&self) -> u32 {
+        self.vertices.creations()
     }
 
     /// Encodes the debug pass.
