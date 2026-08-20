@@ -70,8 +70,11 @@ impl Default for TerrainShape {
 }
 
 impl TerrainShape {
-    /// A flat world at `height`, for tests and for scenarios that want terrain
-    /// out of the way.
+    /// No *local* relief — a block with no hills of its own.
+    ///
+    /// This is not by itself a flat world: the continental surface the block
+    /// sits on is still there, so heights will be smooth but not level. For
+    /// genuinely flat ground use [`ElevationGenerator::flat`].
     pub const fn flat(height: f32) -> Self {
         Self {
             relief: 0.0,
@@ -88,12 +91,61 @@ impl TerrainShape {
 pub struct ElevationGenerator {
     seed: u64,
     shape: TerrainShape,
+    /// Continental structure this terrain sits on (S07's world map).
+    ///
+    /// Not optional, and not cosmetic. Without a regional gradient a third of
+    /// every block is closed basin, and the geometric drainage that flat
+    /// resolution gives those basins is what erosion carves into a herringbone.
+    /// See [`crate::worldmap`].
+    world: crate::worldmap::WorldMap,
 }
 
 impl ElevationGenerator {
     /// A generator for a world.
+    /// A generator for a world, with default continental structure.
     pub const fn new(seed: u64, shape: TerrainShape) -> Self {
-        Self { seed, shape }
+        Self {
+            seed,
+            shape,
+            world: crate::worldmap::WorldMap::new(seed, crate::worldmap::WorldMapSettings::DEFAULT),
+        }
+    }
+
+    /// A generator with explicit continental structure.
+    ///
+    /// [`crate::worldmap::WorldMapSettings::FLAT`] reproduces the bare-noise
+    /// terrain this crate produced before the world map existed, which is what
+    /// makes the difference demonstrable rather than asserted.
+    pub const fn with_world(
+        seed: u64,
+        shape: TerrainShape,
+        settings: crate::worldmap::WorldMapSettings,
+    ) -> Self {
+        Self {
+            seed,
+            shape,
+            world: crate::worldmap::WorldMap::new(seed, settings),
+        }
+    }
+
+    /// A genuinely flat world at `height`.
+    ///
+    /// [`TerrainShape::flat`] removes a block's *local* relief; it does not
+    /// remove the continental surface underneath, so on its own it produces
+    /// terrain that is smooth but still hundreds of metres from level. A test
+    /// fixture that asks for flat ground and silently gets a continental slope
+    /// is a trap — this is the constructor that means what it says.
+    pub const fn flat(seed: u64, height: f32) -> Self {
+        Self::with_world(
+            seed,
+            TerrainShape::flat(height),
+            crate::worldmap::WorldMapSettings::FLAT,
+        )
+    }
+
+    /// The continental surface this terrain sits on.
+    pub const fn world(&self) -> crate::worldmap::WorldMap {
+        self.world
     }
 
     /// The shape this generator was built with.
@@ -108,8 +160,13 @@ impl ElevationGenerator {
     /// [`ElevationGenerator::chunk_elevation`] is the convenience that does it
     /// correctly.
     pub fn height_at(&self, x: f32, z: f32) -> f32 {
+        // The continental surface, plus this block's own relief on top of it.
+        // Added rather than blended: a block keeps its own shape wherever it
+        // sits, and only its altitude and the direction it drains change.
+        let continental = self.world.elevation_at(x, z);
+
         if self.shape.octaves == 0 || self.shape.relief == 0.0 {
-            return self.shape.base;
+            return continental + self.shape.base;
         }
 
         let mut total = 0.0;
@@ -133,7 +190,7 @@ impl ElevationGenerator {
             0.5
         };
 
-        self.shape.base + (unit - 0.5) * self.shape.relief
+        continental + self.shape.base + (unit - 0.5) * self.shape.relief
     }
 
     /// One octave of value noise at grid coordinates, in `0..1`.
@@ -293,23 +350,43 @@ mod tests {
         );
     }
 
+    /// A block's **own** relief is what its shape says, wherever it sits.
+    ///
+    /// Measured against the continental surface rather than against zero. The
+    /// world map moves terrain up and down by hundreds of metres, and the claim
+    /// worth making is that it changes a block's *altitude* and not its shape —
+    /// a block on a plateau has the same 100 m of relief as one in a basin.
+    /// Asserting on absolute height would just be asserting the world map's
+    /// range, which `worldmap.rs` already covers.
     #[test]
-    fn heights_stay_within_the_relief_they_were_given() {
+    fn local_relief_is_what_the_shape_says_wherever_the_block_sits() {
         let shape = TerrainShape {
             relief: 100.0,
             base: 50.0,
             ..TerrainShape::default()
         };
         let generator = ElevationGenerator::new(7, shape);
+        let world = generator.world();
 
         for index in 0..4_000 {
             let x = index as f32 * 13.7;
             let z = index as f32 * -7.3;
-            let height = generator.height_at(x, z);
+
+            let local = generator.height_at(x, z) - world.elevation_at(x, z);
             assert!(
-                (0.0..=100.0).contains(&height),
-                "height {height} at ({x}, {z}) escaped base ± relief/2"
+                (0.0..=100.0).contains(&local),
+                "local relief {local} at ({x}, {z}) escaped base ± relief/2"
             );
+        }
+    }
+
+    /// And a flat generator is genuinely flat, continental surface included.
+    #[test]
+    fn a_flat_generator_is_level_everywhere() {
+        let generator = ElevationGenerator::flat(7, 42.0);
+        for index in 0..1_000 {
+            let x = index as f32 * 911.0;
+            assert_eq!(generator.height_at(x, -x), 42.0);
         }
     }
 
@@ -342,7 +419,7 @@ mod tests {
 
     #[test]
     fn a_flat_shape_is_actually_flat() {
-        let generator = ElevationGenerator::new(5, TerrainShape::flat(12.5));
+        let generator = ElevationGenerator::flat(5, 12.5);
         for index in 0..100 {
             let height = generator.height_at(index as f32 * 100.0, index as f32 * -50.0);
             assert!((height - 12.5).abs() < f32::EPSILON, "got {height}");
