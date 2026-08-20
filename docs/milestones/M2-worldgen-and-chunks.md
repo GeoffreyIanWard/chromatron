@@ -56,6 +56,12 @@ affordable to have both.
   by walking the whole seam, and four adjacent blocks were rendered and looked at with no
   visible seam.
 
+- **Step 2, the flow network** — `cx_worldgen::flow`. Priority-flood fill, D8 routing, and
+  flow accumulation over a block in 3.3 s single-threaded; the largest channel carries 30.8%
+  of the block. Three separate wrong versions preceded it, and the one that assertions could
+  not distinguish from the right answer was caught by rendering the network and looking at it.
+  See S07's "what is implemented" for what each cost.
+
 ## Notes
 
 **The seam question gets answered here, visually.** Fine erosion detail cannot be perfectly continuous across block boundaries with a finite halo. Rivers should stay coherent because region-level drainage constrains them from above — verify that first, since it is the failure that would actually be noticeable. If hillside detail shows a visible seam, the mitigations in order of preference are a wider halo, fewer iterations with stronger per-iteration effect, or a post-pass seam blend.

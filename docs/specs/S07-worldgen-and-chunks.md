@@ -105,7 +105,32 @@ neighbour computes as core. Four adjacent blocks were also rendered as a shaded
 heightmap and looked at: no seam is visible, which is what the halo arithmetic
 being right looks like.
 
-**Step 1 only: base elevation.** `cx_worldgen::ElevationGenerator` is a pure
+**Step 2: depression fill and flow routing.** `cx_worldgen::flow` — priority-flood
+filling, D8 direction, and flow accumulation, over a whole block in **3.3 s**
+single-threaded. The largest channel on a test block carries **30.8% of the block**,
+which is a drainage network rather than a scatter of puddles.
+
+Three things this cost, all of which only a picture or a count would have caught:
+
+- **Flats need real resolution, not "+epsilon".** Raising each filled cell a hair
+  above whichever cell filled it removes every pit and leaves zero sinks — and
+  produces drainage that follows the *fill's own search order*. Rendered, that is
+  straight 45-degree fans across every basin. Flats are resolved with the two-sweep
+  Garbrecht–Martz scheme instead.
+- **The resolution must be a tie-break, not a nudge to elevation.** Adding the flat
+  gradient to heights pushed flat cells above genuinely lower ground nearby —
+  adjacent noise cells can differ by less than the smallest usable step — inverting
+  real slopes. The largest channel fell from 31% of the block to under 2%.
+- **The two flat gradients cannot be summed as peers.** Distance-to-outlet is
+  monotonic by BFS construction; distance-from-higher is not, and their sum has
+  interior local minima. That left 618,140 interior sinks. Outlet distance is the
+  primary key and the other only breaks its ties.
+
+Filled basins still drain in parallel combs, because a flat lake surface has no
+intrinsic drainage direction. What matters is that flow crosses them and collects
+at the outlet, which it does.
+
+**Step 1: base elevation.** `cx_worldgen::ElevationGenerator` is a pure
 function of `(world_seed, position)` — value noise from a positional hash, with
 no permutation table and no initialisation, so there is nothing to get out of
 sync between a generation run and a later regeneration of the same block
@@ -116,10 +141,8 @@ sync between a generation run and a later regeneration of the same block
 the first module with a dependency, and the first entry in S21's field-access
 layer.
 
-Steps 2–9 are M2 and deliberately absent: depression fill, flow routing,
-hydraulic and thermal erosion, channel carving, biome assignment, and scatter.
-They are block-granular and iterative, and none of them can be approximated
-per-cell.
+Steps 3–9 remain: hydraulic and thermal erosion, channel carving, the bake,
+static field derivation, biome assignment, and scatter.
 
 **The terrain therefore looks smooth, and should.** A plausible-looking
 placeholder would have hidden exactly the difference erosion makes, which is the
