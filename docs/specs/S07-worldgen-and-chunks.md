@@ -18,7 +18,11 @@ This is not the same as read-only terrain. Discrete, local, player- and gameplay
 
 Erosion is iterative and non-local — a cell's final height depends on its neighbors over hundreds of iterations. It cannot be expressed as a pure function of a single cell's coordinate. So generation happens at **block** granularity (`ADR-0006` as amended):
 
-- A **block** is 16×16 chunks = 8,192 m square, 16,384² cells at 0.5 m.
+- A **block** is 16×16 chunks = 8,192 m square, 16,384² cells at the 0.5 m field resolution.
+- **Erosion runs on a coarser grid**: 2 m, so 4,096² per block and 5,120² with the halo
+  (`ADR-0015`). At 0.5 m the erosion working set would be 6.64 GB against a 0.8 GB budget.
+  Stream-power erosion describes channels and hillslopes — tens of metres across — so the
+  finer grid buys sixteen times the samples and no more information about the process.
 - A block is generated with a **halo margin** of 2 chunks on each side, which is eroded along with the block and then discarded.
 - Blocks are positionally deterministic: `hash(world_seed, block_coord, ...)`. Generating block (3,1) before (0,0) produces identical output to the reverse.
 - **Chunks are pure extraction** from a generated block — slicing, no computation.
@@ -32,7 +36,8 @@ Run per block, on a background pool:
 3. **Hydraulic erosion** — grid-based stream-power erosion, N iterations. Grid-based, not droplet-based: droplet erosion needs a sequential RNG and is therefore order-dependent, which `ADR-0006` forbids. Grid-based is deterministic and parallelizes by row band.
 4. **Thermal erosion** — talus angle relaxation for scree slopes and cliff bases.
 5. **Channel carving** — incise the flow network into the eroded surface, with width and depth from discharge (see S08's hydraulic geometry relations).
-6. **Discard halo, bake elevation.** `ELEVATION` is final as far as *generation* is concerned; from here it changes only via `EditCommand` (S19).
+6. **Discard halo, bake elevation** — resample the eroded 2 m surface up to the 0.5 m field grid and re-add the high-frequency positional detail erosion does not govern (`ADR-0015`). Erosion supplies the landform; noise supplies the surface.
+   `ELEVATION` is final as far as *generation* is concerned; from here it changes only via `EditCommand` (S19).
 7. **Derive static fields** — slope, aspect, flow direction, flow accumulation, floodplain masks per discharge tier, traversability, water body extents and surface levels.
 8. **Biome assignment** — content-defined lookup over temperature, precipitation, elevation, slope, drainage.
 9. **Scatter placement** — vegetation, resources, features. Positional per chunk, cheap.
@@ -83,8 +88,22 @@ Not a terrain editor. No live worldgen parameter tweaking with in-place regenera
 
 - **Halo width vs. erosion iteration count.** The influence radius of erosion grows with iterations; a 2-chunk halo bounds it only up to some iteration count. Beyond that, fine erosion detail cannot be perfectly continuous across block seams. Rivers stay coherent because the region-level drainage network constrains them from above, but hillside detail may show a faint seam. This needs a visual check at M2 — the mitigations, in order of preference, are a wider halo, fewer iterations with stronger per-iteration effect, or a post-pass seam blend.
 - Block size. 8 km is a guess balancing generation latency against seam frequency. Measure at M2.
+  `ADR-0015` deliberately kept it at 8 km rather than shrinking it to solve the memory problem,
+  because shrinking would have multiplied the seams this milestone exists to evaluate.
 
 ## What is implemented
+
+**The block grid.** `cx_worldgen::block` is the surface steps 2–5 operate on: a
+5,120² erosion grid over one block and its halo, indexed by an `ErosionCell`
+that cannot be built out of range. Halo cells are indexed like core cells with
+the origin at the halo's corner, so a stage sweeping the buffer needs no
+boundary special case — edge handling is where iterative solvers go wrong.
+
+A full block fills in **680 ms single-threaded at 100 MB** for base elevation,
+and a block's halo was verified to hold cell-for-cell the same heights its
+neighbour computes as core. Four adjacent blocks were also rendered as a shaded
+heightmap and looked at: no seam is visible, which is what the halo arithmetic
+being right looks like.
 
 **Step 1 only: base elevation.** `cx_worldgen::ElevationGenerator` is a pure
 function of `(world_seed, position)` — value noise from a positional hash, with
