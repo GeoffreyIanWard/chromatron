@@ -299,6 +299,7 @@ impl Registry {
                         .map(|system| SystemRecord {
                             name: system.name,
                             phase: system.phase,
+                            source: system.source,
                         })
                         .collect();
                     // Sorted, so a module's internal registration order cannot

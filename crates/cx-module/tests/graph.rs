@@ -199,7 +199,14 @@ fn the_payload_carries_its_schema_version_and_schedule_hash() {
     let resolved = resolve_in(0);
     let payload = export(&resolved);
 
-    assert!(payload.contains("\"schema\": \"1.0\""));
+    // Pinned against the constant rather than a literal, so a deliberate bump
+    // updates one place. What must not change silently is the *major*, which is
+    // what a viewer refuses on — asserted separately below.
+    assert!(payload.contains(&format!("\"schema\": \"{}\"", cx_module::SCHEMA_VERSION)));
+    assert!(
+        payload.contains("\"schema\": \"1."),
+        "a major bump breaks every existing viewer and is not something to do by accident"
+    );
     assert!(
         payload.contains(&format!("{:016x}", resolved.schedule_hash())),
         "the payload must be matchable against the save or replay it describes"
@@ -263,4 +270,111 @@ fn degraded_behaviour_text_is_json_escaped() {
         payload.contains("\\\"no resources\\\""),
         "prose written by a module author contains quotes, and must be escaped:\n{payload}"
     );
+}
+
+/// Where a declaration was made reaches the graph, and nothing else does.
+///
+/// S21 wants nodes to link to a file and line so a reader can open the
+/// registration rather than go looking for it. The location is captured with
+/// `#[track_caller]`, so it is the `registrar.system(...)` call inside the
+/// module — not somewhere in the registrar's own internals, which would be the
+/// same useless line for every system in the engine.
+mod source_links {
+    use super::*;
+
+    /// Two modules with identical declarations, made on different lines.
+    struct Early;
+    struct Late;
+
+    impl Module for Early {
+        const ID: ModuleId = ModuleId("early");
+        fn register(registrar: &mut Registrar) {
+            registrar.system(Phase::AgentAct, "work", || {});
+        }
+    }
+
+    impl Module for Late {
+        const ID: ModuleId = ModuleId("early");
+
+        fn register(registrar: &mut Registrar) {
+            // Deliberately further down the file than `Early`'s, so the
+            // captured location genuinely differs and the hash test below is
+            // not vacuous.
+
+            registrar.system(Phase::AgentAct, "work", || {});
+        }
+    }
+
+    fn resolve<M: Module>() -> cx_module::Resolved {
+        let mut registry = Registry::new();
+        registry.register::<M>();
+        registry.resolve().expect("the fixture should resolve")
+    }
+
+    fn only_system<M: Module>() -> cx_module::SystemRecord {
+        *resolve::<M>()
+            .modules()
+            .flat_map(|record| record.systems.iter())
+            .next()
+            .expect("the fixture registers one system")
+    }
+
+    #[test]
+    fn the_location_is_the_registration_not_the_registrar() {
+        let system = only_system::<Early>();
+
+        assert!(
+            system.source.file.contains("graph.rs"),
+            "the location should point at this test file, not into cx-module: {}",
+            system.source.file
+        );
+        assert!(system.source.line > 0);
+    }
+
+    #[test]
+    fn moving_a_registration_does_not_change_the_schedule_hash() {
+        // The hash is world identity: it goes into saves and replays, and
+        // ADR-0004 makes changing it a migration. Adding a comment above a
+        // registration must not invalidate anyone's save.
+        let early = only_system::<Early>();
+        let late = only_system::<Late>();
+
+        assert_ne!(
+            early.source.line, late.source.line,
+            "the fixtures must differ in line, or this proves nothing"
+        );
+        assert_eq!(
+            resolve::<Early>().schedule_hash(),
+            resolve::<Late>().schedule_hash(),
+            "moving a registration down a file changed world identity"
+        );
+    }
+
+    #[test]
+    fn the_export_carries_the_location() {
+        let payload = export(&resolve::<Early>());
+
+        assert!(
+            payload.contains("\"source\": \"") && payload.contains("graph.rs:"),
+            "the exported graph should carry a source location:\n{payload}"
+        );
+    }
+
+    #[test]
+    fn the_export_is_still_byte_identical_and_carries_no_absolute_path() {
+        // Paths come from the compiler and are relative to the workspace root,
+        // so every machine building this commit emits the same string. An
+        // absolute path would have broken `--baseline` diffing for anyone whose
+        // checkout lived somewhere else — and would have leaked a home
+        // directory into an artifact.
+        let first = export(&resolve::<Early>());
+        for _ in 0..5 {
+            assert_eq!(export(&resolve::<Early>()), first);
+        }
+
+        assert!(
+            !first.contains(env!("CARGO_MANIFEST_DIR")),
+            "an absolute path reached the payload"
+        );
+    }
 }

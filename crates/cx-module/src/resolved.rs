@@ -15,6 +15,13 @@ pub struct SystemRecord {
     pub name: &'static str,
     /// The phase it runs in.
     pub phase: Phase,
+    /// Where it was registered, for the S21 graph's source links.
+    ///
+    /// Ordered *after* name and phase in the derived `Ord`, so that sorting the
+    /// records — which is what keeps the schedule hash independent of
+    /// registration order — is unaffected by where the call happens to sit in a
+    /// file. Moving a registration up a line must not change the hash.
+    pub source: crate::module::Source,
 }
 
 /// One module, as resolved.
