@@ -1,7 +1,7 @@
 ---
 id: S10
 title: Agents & Navigation
-status: not started
+status: partial (phase split and steering at M2)
 depends_on: [S02, S05, S06, S09]
 provides: [pathfinding, flow-fields, steering, behavior, agent-lod]
 crates_touched: [cx-agents]
@@ -43,3 +43,47 @@ No learning or adaptive AI. No navmesh — the world is heightfield-and-grid sha
 
 - Utility scoring vs. behavior trees. Deferred to M6; write an ADR when decided.
 - Whether flow fields need to account for other agents as dynamic cost (crowd congestion). Adds a rebuild-per-tick cost; probably worth it only for dense colony scenarios.
+
+## What is implemented
+
+**The read-then-write split**, which is what the rest of S10 is built on:
+
+| Phase | System | Reads | Writes |
+|---|---|---|---|
+| `AgentDecide` | `decide_steering` | the S05 index, transforms | its own `Intent` |
+| `AgentAct` | `resolve_claims` | every `Intent` | `Claimable` holders |
+| `AgentAct` | `apply_intents` | its own `Intent` | its own `Transform` |
+
+Nothing reads another agent's intent, and nothing writes shared state before
+every agent has decided. That is what makes the tick independent of which agent
+the scheduler reached first — within a phase, order is unspecified
+(`ADR-0001`), so a decision that depended on it would be a divergence rather
+than an oddity.
+
+Plus **local separation steering** — the bottom tier of S10's own navigation
+ladder, and the only one needing no infrastructure that does not exist yet — and
+**deterministic claim resolution**: a contested claim goes to the lower
+`Entity`, never to whichever agent was reached first. Removing that tiebreak
+fails a test, checked.
+
+### It changed the S05 query API
+
+`SpatialGrid`'s queries took `&mut self`, because the grid owned the result
+buffer. That made a sensing system need `ResMut<SpatialIndex>`, which cannot run
+in parallel with anything — the opposite of what S05 and S10 both require of
+sensing.
+
+`within_radius_into` now takes `&self` and writes into a caller-supplied buffer;
+systems hold theirs as a `Local`, so nothing allocates per query and any number
+of them can sense at once. The `&mut self` form remains as a convenience for
+single-threaded callers and tests, implemented in terms of the new one.
+
+This was found by the first consumer, one PR after the index landed.
+
+### Still M6
+
+Flow fields, A* over the region graph, cost grids derived from field data,
+utility scoring versus behaviour trees, agent LOD, and path invalidation on
+terrain edits. The acceptance criteria's figures — 100,000 `Full` agents under
+15 ms, a chunk flow field under 3 ms — are not measured; there is no population
+that size and no flow field to measure.

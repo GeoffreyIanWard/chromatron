@@ -153,3 +153,50 @@ fn systems_run_in_the_phases_their_modules_declared() {
         );
     }
 }
+
+/// A module cannot be in a profile without what it requires.
+///
+/// `agents` requires `spatial_index`. A profile carrying one and not the other
+/// fails resolution — which is the module system working, not a constraint to
+/// route around, and it is worth a test because the failure would otherwise
+/// only appear when someone edited a profile.
+#[test]
+fn a_profile_cannot_carry_an_agent_module_without_an_index() {
+    use cx_module::Profile;
+
+    let mut registry = Registry::new();
+    Profile::new("broken")
+        .with::<cx_agents::AgentsModule>()
+        .register_into(&mut registry);
+
+    assert!(
+        registry.resolve().is_err(),
+        "agents without a spatial index should not resolve"
+    );
+}
+
+/// Every module in `full-sim` has its requirements met by another module in it.
+///
+/// The general form of the test above: a profile is only meaningful if every
+/// declared dependency is actually satisfied inside it.
+#[test]
+fn every_requirement_in_full_sim_is_provided_within_it() {
+    let resolved = resolve("full-sim");
+
+    let provided: Vec<&str> = resolved
+        .modules()
+        .flat_map(|record| record.provides.iter())
+        .map(|capability| capability.name())
+        .collect();
+
+    for record in resolved.modules() {
+        for required in record.requires {
+            assert!(
+                provided.contains(&required.name()),
+                "{:?} requires {} but nothing in full-sim provides it",
+                record.id,
+                required.name()
+            );
+        }
+    }
+}

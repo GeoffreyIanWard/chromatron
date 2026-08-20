@@ -15,6 +15,7 @@ cx-time.workspace = true
 cx-diag.workspace = true
 cx-worldgen.workspace = true
 cx-spatial.workspace = true
+cx-agents.workspace = true
 
 [lints]
 workspace = true
