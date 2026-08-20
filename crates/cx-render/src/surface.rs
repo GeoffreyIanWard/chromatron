@@ -347,9 +347,15 @@ impl WindowSurface {
             .create_view(&wgpu::TextureViewDescriptor::default());
 
         let wgpu_device = device.wgpu_device();
+        renderer.instanced_mut().upload_instances(
+            wgpu_device,
+            device.wgpu_queue(),
+            contents.instances,
+        );
         let instance_buffer = renderer
             .instanced()
-            .upload_instances(wgpu_device, contents.instances);
+            .instance_buffer()
+            .expect("an upload always leaves a buffer");
 
         let mut encoder = wgpu_device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("cx-render present"),
@@ -358,15 +364,20 @@ impl WindowSurface {
         // Culling first: the compute pass compacts the visible instances and
         // fills in the draw's instance count, so the scene draws indirect and
         // the CPU never learns how many survived.
-        let culled = renderer.cull().encode(
+        let generation = renderer.instanced().instance_generation();
+        let index_count = renderer.instanced().index_count();
+        let culled = renderer.cull_mut().encode(
             device,
             &mut encoder,
-            &instance_buffer,
-            contents.instances.len() as u32,
-            renderer.instanced().index_count(),
-            crate::culling::Frustum::from_view_projection(
-                camera.view_projection(self.config.width as f32 / self.config.height as f32),
-            ),
+            crate::cull_pass::CullInputs {
+                instances: &instance_buffer,
+                generation,
+                count: contents.instances.len() as u32,
+                index_count,
+                frustum: crate::culling::Frustum::from_view_projection(
+                    camera.view_projection(self.config.width as f32 / self.config.height as f32),
+                ),
+            },
         );
 
         let stats = renderer.instanced().encode_draw(
@@ -388,7 +399,13 @@ impl WindowSurface {
         );
 
         // Debug lines last, so they land on top of the scene they annotate.
-        let debug_buffer = renderer.debug().upload(wgpu_device, contents.debug);
+        renderer
+            .debug_mut()
+            .upload(wgpu_device, device.wgpu_queue(), contents.debug);
+        let debug_buffer = renderer
+            .debug()
+            .vertex_buffer()
+            .expect("an upload always leaves a buffer");
         let debug_stats = renderer.debug().encode(
             device.wgpu_queue(),
             &mut encoder,
@@ -479,7 +496,7 @@ mod tests {
             return;
         };
 
-        let renderer = InstancedRenderer::new(&device, &MeshData::unit_cube())
+        let mut renderer = InstancedRenderer::new(&device, &MeshData::unit_cube())
             .expect("the unit cube is a valid mesh");
 
         let camera = Camera::looking_at(Vec3::new(0.0, 0.0, 3.0), Vec3::ZERO);
@@ -496,7 +513,7 @@ mod tests {
 
         // Debug lines go through their own pipeline, which has the same
         // format-mismatch failure mode, so they are drawn here too.
-        let debug_renderer = crate::debug::DebugRenderer::new(&device);
+        let mut debug_renderer = crate::debug::DebugRenderer::new(&device);
         let mut debug = DebugDraw::default();
         debug.aabb(
             WorldPos::new(ChunkCoord::new(0, 0), Vec3::splat(-0.75)),
@@ -520,7 +537,7 @@ mod tests {
                 },
                 clear,
                 crate::instanced::OffscreenExtras {
-                    debug: Some(&debug_renderer),
+                    debug: Some(&mut debug_renderer),
                     overlay: None,
                 },
             )
@@ -543,7 +560,7 @@ mod tests {
                 },
                 clear,
                 crate::instanced::OffscreenExtras {
-                    debug: Some(&debug_renderer),
+                    debug: Some(&mut debug_renderer),
                     overlay: None,
                 },
             )

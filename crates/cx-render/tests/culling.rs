@@ -71,9 +71,9 @@ struct Fixture {
 
 impl Fixture {
     /// Runs the GPU cull and returns how many instances survived.
-    fn gpu_visible(&self, camera: &Camera, instances: &[cx_view::ExtractedInstance]) -> u32 {
+    fn gpu_visible(&mut self, camera: &Camera, instances: &[cx_view::ExtractedInstance]) -> u32 {
         self.pass
-            .debug_cull_count(&self.device, &self.renderer, camera, ASPECT, instances)
+            .debug_cull_count(&self.device, &mut self.renderer, camera, ASPECT, instances)
     }
 }
 
@@ -93,7 +93,7 @@ fn fixture(capacity: u32) -> Option<Fixture> {
 /// implementation keep the same instances.
 #[test]
 fn the_shader_agrees_with_the_rust_frustum() {
-    let Some(fixture) = fixture(COUNT) else {
+    let Some(mut fixture) = fixture(COUNT) else {
         return;
     };
     let instances = scattered(COUNT);
@@ -127,7 +127,7 @@ fn culling_actually_removes_something() {
     // The test above would pass if both sides kept everything. This is the
     // control: a camera pointed away from the scene must reject most of it, and
     // one pointed at it must keep more.
-    let Some(fixture) = fixture(COUNT) else {
+    let Some(mut fixture) = fixture(COUNT) else {
         return;
     };
     let instances = scattered(COUNT);
@@ -151,7 +151,7 @@ fn the_count_resets_between_frames() {
     // The counter is what the indirect draw reads. Leaving last frame's value in
     // it makes the scene draw more instances every frame until it reads past the
     // end of the buffer — which is a validation error at best.
-    let Some(fixture) = fixture(COUNT) else {
+    let Some(mut fixture) = fixture(COUNT) else {
         return;
     };
     let instances = scattered(COUNT);
@@ -167,7 +167,7 @@ fn the_count_resets_between_frames() {
 
 #[test]
 fn an_empty_scene_culls_to_nothing() {
-    let Some(fixture) = fixture(64) else {
+    let Some(mut fixture) = fixture(64) else {
         return;
     };
     let camera = Camera::looking_at(Vec3::new(0.0, 0.0, 10.0), Vec3::ZERO);
@@ -180,7 +180,7 @@ fn more_instances_than_capacity_are_clamped_rather_than_overrunning() {
     // The shader writes into a fixed buffer at an index from an atomic. Handing
     // it more instances than the buffer holds would let it write past the end,
     // which is memory corruption on the GPU rather than a validation error.
-    let Some(fixture) = fixture(64) else {
+    let Some(mut fixture) = fixture(64) else {
         return;
     };
     let instances = scattered(1_000);
@@ -203,7 +203,7 @@ fn more_instances_than_capacity_are_clamped_rather_than_overrunning() {
 /// exercise it.
 #[test]
 fn counts_around_the_workgroup_boundary_are_handled() {
-    let Some(fixture) = fixture(512) else {
+    let Some(mut fixture) = fixture(512) else {
         return;
     };
     let camera = Camera::looking_at(Vec3::new(0.0, 30.0, 400.0), Vec3::ZERO);

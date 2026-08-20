@@ -29,7 +29,7 @@ First frame on screen, and — more importantly — the first proof that the sim
 | 100,000 instanced meshes at 60 fps | < 20 draw calls |
 | 30 Hz sim, 144 Hz render, moving instances | 99th-pct frame time < 8 ms, no visible stutter |
 | Extract 100,000 visible instances | < 2 ms |
-| Debug draw 10,000 lines | < 1 ms — **measured 1.02 ms**, see below |
+| Debug draw 10,000 lines | < 1 ms — **measured 0.21 ms** after pooling, from 1.02 ms before it; see below |
 | Headless vs windowed state hash, 10,000 ticks | identical — **met** |
 | wgpu types outside `cx-render` | zero, CI enforced |
 | Pause → step 5 → resume vs run 5 continuously | identical state — **met** |
@@ -308,10 +308,17 @@ instances, so nothing has to know the current origin.
 
 | Device | Marginal | With lines | Without |
 |---|---|---|---|
-| Apple M4 Pro (Metal) — developer machine | **1.02 ms** | 1.48 ms | 0.46 ms |
-| `llvmpipe` (Vulkan, software) — Ubuntu runner | **23.38 ms** | 23.95 ms | 0.57 ms |
+| Apple M4 Pro (Metal) — developer machine | **0.21 ms** | 0.49 ms | 0.28 ms |
+| Apple M4 Pro — *before pooling* | 1.02 ms | 1.48 ms | 0.46 ms |
+| `llvmpipe` (Vulkan, software) — Ubuntu runner — *before pooling* | 23.38 ms | 23.95 ms | 0.57 ms |
 
-The budget is 1 ms. On hardware that is *on* the line, not under it.
+The budget is 1 ms. The first measurement landed *on* the line at 1.02 ms;
+pooling the vertex buffer took it to 0.21 ms, a factor of roughly five, and the
+baseline frame came down with it (0.46 ms to 0.28 ms) because the instance
+buffer and the offscreen targets stopped being recreated too.
+
+The lavapipe row is the figure from before pooling, kept because the point it
+makes does not depend on the number being current.
 
 The 23x spread is the case for recording rather than gating, made in one row: a
 threshold that lavapipe could pass would be meaningless on hardware, and one
@@ -324,9 +331,9 @@ frame would have credited debug draw with the simulation, the extract, and the
 scene pass, and produced a comfortable-looking number that answered a different
 question.
 
-The obvious cost is already known and already recorded below — the vertex buffer
-is created and uploaded every frame. Pooling it is the same work that the
-instance buffer needs, and this is now a second reason to do it.
+The obvious cost — the vertex buffer being created and uploaded every frame — is
+now gone; see the section below. This measurement is what showed it was worth
+the effort, and the drop from 1.02 ms to 0.21 ms is what it bought.
 
 Not gated in CI, for the reason set out above: submit backpressure puts the GPU's
 cost into any wall-clock frame measurement, and the runners' software
@@ -493,21 +500,48 @@ frame as a PPM. Pixel assertions say colours differ and come from the palette;
 they cannot say the result *looks* right, and looking at rendered output has
 caught things in this project that reasoning about it did not.
 
-## Known inefficiency in the frame path
+## Per-frame allocations, and the gate that now holds them at zero
 
-`InstancedRenderer::render` currently creates the colour target, the depth target, and the
-instance buffer **every frame**. That is wasteful, and it is part of what the recorded frame
-costs above are paying for.
+The frame path used to create, **every frame**: the instance buffer, the offscreen colour
+target, its depth target, the debug vertex buffer, and the cull pass's bind group. All five
+had the same shape from one frame to the next; only the bytes inside them differed.
 
-Pooling those resources is the obvious fix and is deliberately not done yet: the loop needed
-to exist before optimising it was meaningful. Worth doing before instance counts approach the
-100,000 the render gate names — and the recorded per-device numbers are the before-picture to
-compare against.
+They are now pooled in `cx_render::pool`. A `GrowableBuffer` grows by doubling and never
+shrinks, so creations over a run are logarithmic in the largest frame rather than linear in
+the frame count; a `TargetPool` keeps its textures until the size or format changes, which is
+the most it can do — unlike a buffer, a texture's extent is fixed at creation. The cull bind
+group is cached against a **generation** counter that the buffer pool bumps only when it
+actually replaces the buffer, because rewriting a buffer's contents leaves a bind group valid
+and replacing the buffer does not.
 
-A per-frame **allocation count** would be a genuinely hardware-independent gate for this,
-in the same shape as `alloc_per_tick_sim_code` (`ADR-0014`). It is not added yet because it
-would fail immediately against the behaviour described above; it belongs with the pooling
-work that makes it passable.
+### The gate
+
+`crates/cx-render/tests/pooling.rs`: **after a warm-up frame, a steady-state frame creates
+zero GPU resources.**
+
+This is the hardware-independent gate this section previously said was wanted, in the shape
+`ADR-0014`'s `alloc_per_tick_sim_code` established. Every other renderer measurement in M1 is
+recorded rather than gated because a frame time on an M4 Pro and a frame time on lavapipe
+differ by two orders of magnitude. A creation count is not like that: zero is zero on both.
+
+It asserts in both directions. `the_counter_moves_when_a_buffer_grows` makes the same counter
+move on purpose, and `a_resize_costs_once_and_then_settles` does the same for the target pool
+— without those, the file would pass just as happily against a counter that is never
+incremented, which is the failure mode this project has hit more than once. It was also
+checked against the old behaviour directly, by forcing a reallocation on every write: the gate
+fails with *"frame 0 created 2 GPU resources"*, and passes again once the check is restored.
+
+### What it bought
+
+Debug draw's marginal cost fell from 1.02 ms to 0.21 ms, and the baseline frame from 0.46 ms
+to 0.28 ms, on the developer machine. See the table above.
+
+### What still allocates, legitimately
+
+A **resize**. The colour and depth textures cannot be reused at a new size, so a window being
+dragged allocates once per distinct size — the gate covers this explicitly rather than
+pretending otherwise. And **growth**: the first frame at a new high-water mark of instances
+reallocates, which is the doubling policy working, not a leak.
 
 ## Notes
 

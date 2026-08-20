@@ -29,7 +29,7 @@ fn instance(position: Vec3, palette: u32) -> ExtractedInstance {
 /// Renders instances head-on and returns the frame.
 fn render(instances: &[ExtractedInstance]) -> Option<(Readback, u32)> {
     let device = device_or_skip()?;
-    let renderer = InstancedRenderer::new(&device, &MeshData::unit_cube())
+    let mut renderer = InstancedRenderer::new(&device, &MeshData::unit_cube())
         .expect("the unit cube is a valid mesh");
 
     // Slightly above, so the top face — palette slot 0 — is visible along with

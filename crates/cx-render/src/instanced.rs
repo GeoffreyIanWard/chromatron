@@ -170,6 +170,13 @@ pub(crate) struct DrawCall<'a> {
 /// the type.
 pub struct InstancedRenderer {
     palette: crate::palette::PaletteTexture,
+    /// Refilled each frame, so the conversion to GPU layout does not allocate.
+    staging: Vec<InstanceRaw>,
+    /// Reused between frames. Instance *contents* change every frame; the
+    /// buffer holding them does not need to.
+    instances: crate::pool::GrowableBuffer,
+    /// Offscreen colour and depth, kept until the size or format changes.
+    targets: crate::pool::TargetPool,
     // The offscreen pipeline. A pipeline is bound to one colour format, and a
     // window's format is not knowable until a window exists — macOS hands out
     // `Bgra8UnormSrgb` where the offscreen target is `Rgba8UnormSrgb` — so the
@@ -199,7 +206,7 @@ impl std::fmt::Debug for InstancedRenderer {
 /// already been split once for the same reason.
 pub(crate) struct OffscreenExtras<'a> {
     /// The debug-line renderer, when there are lines to draw.
-    pub debug: Option<&'a DebugRenderer>,
+    pub debug: Option<&'a mut DebugRenderer>,
     /// The overlay renderer and this frame's output.
     pub overlay: Option<(&'a mut crate::ui::UiRenderer, cx_ui::UiOutput)>,
 }
@@ -364,6 +371,15 @@ impl InstancedRenderer {
 
         Ok(Self {
             palette,
+            staging: Vec::new(),
+            instances: crate::pool::GrowableBuffer::new(
+                "cx-render instances",
+                // STORAGE as well as VERTEX: the cull pass reads this buffer as
+                // storage before the draw reads the compacted result as vertex
+                // data.
+                wgpu::BufferUsages::VERTEX.union(wgpu::BufferUsages::STORAGE),
+            ),
+            targets: crate::pool::TargetPool::new(),
             pipeline,
             shader,
             pipeline_layout,
@@ -482,39 +498,64 @@ impl InstancedRenderer {
         }
     }
 
-    /// Uploads instances to a fresh buffer.
+    /// Uploads instances into the pooled buffer.
+    ///
+    /// This is the *mutate* half of the frame path: it writes, and the buffer is
+    /// read back afterwards through [`Self::instance_buffer`]. Splitting the two
+    /// is what lets a caller hold the buffer while calling `&self` methods on
+    /// the renderer that owns the pool.
     ///
     /// An empty buffer is invalid, and drawing zero instances is a legitimate
     /// frame — an off-screen camera, or a world not yet populated. One zeroed
     /// entry keeps the buffer valid; the draw asks for zero instances anyway.
     pub(crate) fn upload_instances(
-        &self,
+        &mut self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         instances: &[ExtractedInstance],
-    ) -> wgpu::Buffer {
-        let raw: Vec<InstanceRaw> = instances.iter().map(InstanceRaw::from_extracted).collect();
-        let bytes: &[u8] = if raw.is_empty() {
-            &[0u8; size_of::<InstanceRaw>()]
-        } else {
-            bytemuck::cast_slice(&raw)
-        };
+    ) {
+        self.staging.clear();
+        self.staging
+            .extend(instances.iter().map(InstanceRaw::from_extracted));
+        if self.staging.is_empty() {
+            self.staging.push(bytemuck::Zeroable::zeroed());
+        }
 
-        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("cx-render instances"),
-            contents: bytes,
-            // STORAGE as well as VERTEX: the cull pass reads this buffer as
-            // storage before the draw reads the compacted result as vertex
-            // data. Without it, binding it to the compute shader is a
-            // validation error rather than anything subtle.
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE,
-        })
+        let bytes: &[u8] = bytemuck::cast_slice(&self.staging);
+        self.instances.write(device, queue, bytes);
+    }
+
+    /// The pooled instance buffer, after an upload.
+    ///
+    /// A clone, for the same reason [`crate::pool::TargetPool::get`] returns
+    /// one: the handle is `Arc`-backed, so this is a refcount bump, and a borrow
+    /// would pin the renderer for the whole draw.
+    pub(crate) fn instance_buffer(&self) -> Option<wgpu::Buffer> {
+        self.instances.get().cloned()
+    }
+
+    /// Bumped whenever the instance buffer is *replaced* rather than rewritten.
+    ///
+    /// A bind group holds the buffer it was built against, so it survives a
+    /// rewrite and must be rebuilt after a reallocation. This is the key to
+    /// cache one on.
+    pub(crate) const fn instance_generation(&self) -> u64 {
+        self.instances.generation()
+    }
+
+    /// How many GPU resources the frame path has created since construction.
+    ///
+    /// The gate: in a steady state this must stop climbing. See
+    /// `tests/pooling.rs`.
+    pub(crate) const fn creations(&self) -> u32 {
+        self.instances.creations() + self.targets.creations()
     }
 
     /// Draws every instance to an offscreen target and reads the pixels back.
     ///
     /// One draw call regardless of instance count — see [`DrawStats`].
     pub fn render(
-        &self,
+        &mut self,
         render_device: &RenderDevice,
         width: u32,
         height: u32,
@@ -552,7 +593,7 @@ impl InstancedRenderer {
     /// offscreen exercises the same pipeline against the same format, on a
     /// machine with no display server.
     pub(crate) fn render_to_format(
-        &self,
+        &mut self,
         render_device: &RenderDevice,
         target: OffscreenTarget,
         camera: &Camera,
@@ -575,8 +616,13 @@ impl InstancedRenderer {
         let device = render_device.wgpu_device();
         let queue = render_device.wgpu_queue();
 
-        let instance_buffer = self.upload_instances(device, contents.instances);
-        let (colour_texture, colour_view) = create_colour_target(device, width, height, format);
+        self.upload_instances(device, queue, contents.instances);
+        let instance_buffer = self
+            .instance_buffer()
+            .expect("an upload always leaves a buffer");
+
+        let (colour_texture, colour_view, depth_view) =
+            self.targets.get(device, width, height, format);
 
         // Reuse the offscreen pipeline when the format matches, rather than
         // rebuilding one per call: this is also the normal render path.
@@ -587,7 +633,6 @@ impl InstancedRenderer {
             built = self.pipeline_for(device, format);
             &built
         };
-        let depth_view = create_depth_target(device, width, height);
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("cx-render instanced draw"),
@@ -613,7 +658,10 @@ impl InstancedRenderer {
         // Debug lines after the scene, on top of it, sharing its depth.
         let debug_stats = match debug {
             Some(debug) => {
-                let vertices = debug.upload(device, contents.debug);
+                debug.upload(device, queue, contents.debug);
+                let vertices = debug
+                    .vertex_buffer()
+                    .expect("an upload always leaves a buffer");
                 let pipeline;
                 let debug_pipeline = if format == crate::offscreen::TARGET_FORMAT {
                     debug.pipeline()
@@ -665,30 +713,6 @@ impl InstancedRenderer {
     }
 }
 
-fn create_colour_target(
-    device: &wgpu::Device,
-    width: u32,
-    height: u32,
-    format: wgpu::TextureFormat,
-) -> (wgpu::Texture, wgpu::TextureView) {
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("cx-render colour target"),
-        size: wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    (texture, view)
-}
-
 pub(crate) fn create_depth_target(
     device: &wgpu::Device,
     width: u32,
@@ -737,7 +761,7 @@ mod tests {
 
     #[test]
     fn a_cube_in_front_of_the_camera_covers_the_centre_and_not_the_corners() {
-        let Some((device, renderer)) = setup() else {
+        let Some((device, mut renderer)) = setup() else {
             return;
         };
 
@@ -767,7 +791,7 @@ mod tests {
         // The property M1's gate actually measures. It holds at any count, so
         // asserting it here catches a regression long before the 100k benchmark
         // does — and without needing a GPU fast enough to make 100k meaningful.
-        let Some((device, renderer)) = setup() else {
+        let Some((device, mut renderer)) = setup() else {
             return;
         };
 
@@ -795,7 +819,7 @@ mod tests {
 
     #[test]
     fn geometry_behind_the_camera_does_not_appear() {
-        let Some((device, renderer)) = setup() else {
+        let Some((device, mut renderer)) = setup() else {
             return;
         };
 
@@ -824,12 +848,12 @@ mod tests {
         // Catches a model matrix built in the wrong order — scale-rotate-
         // translate composed the other way scales the *translation*, which
         // moves instances instead of resizing them.
-        let Some((device, renderer)) = setup() else {
+        let Some((device, mut renderer)) = setup() else {
             return;
         };
 
         let camera = Camera::looking_at(Vec3::new(0.0, 0.0, 6.0), Vec3::ZERO);
-        let lit = |instance: ExtractedInstance| -> usize {
+        let mut lit = |instance: ExtractedInstance| -> usize {
             let (readback, _) = renderer
                 .render(&device, 64, 64, &camera, &[instance], BLACK)
                 .expect("rendering works");
@@ -856,7 +880,7 @@ mod tests {
 
     #[test]
     fn an_empty_instance_list_renders_the_clear_colour_without_drawing() {
-        let Some((device, renderer)) = setup() else {
+        let Some((device, mut renderer)) = setup() else {
             return;
         };
 

@@ -73,6 +73,11 @@ impl FrameRenderer {
         &self.cull
     }
 
+    /// The culling pass, for encoding — it caches a bind group.
+    pub(crate) const fn cull_mut(&mut self) -> &mut CullPass {
+        &mut self.cull
+    }
+
     /// Draws a frame to an offscreen target and reads the pixels back.
     ///
     /// Takes the overlay too, so the windowed path's *only* untested part is
@@ -100,7 +105,7 @@ impl FrameRenderer {
             contents,
             clear,
             crate::instanced::OffscreenExtras {
-                debug: Some(&self.debug),
+                debug: Some(&mut self.debug),
                 overlay: overlay.map(|overlay| (&mut self.ui, overlay)),
             },
         )
@@ -114,6 +119,28 @@ impl FrameRenderer {
     /// The debug-line renderer.
     pub(crate) const fn debug(&self) -> &DebugRenderer {
         &self.debug
+    }
+
+    /// The scene renderer, for the upload half of a frame.
+    pub(crate) const fn instanced_mut(&mut self) -> &mut InstancedRenderer {
+        &mut self.instanced
+    }
+
+    /// The debug-line renderer, for the upload half of a frame.
+    pub(crate) const fn debug_mut(&mut self) -> &mut DebugRenderer {
+        &mut self.debug
+    }
+
+    /// How many GPU resources the frame path has created since this renderer was
+    /// built.
+    ///
+    /// The pooling gate: after a warm-up frame, drawing the same scene again
+    /// must not move this. It counts creations rather than measuring time, so it
+    /// means the same thing on a laptop GPU and on a software rasterizer — which
+    /// is what M1 asked for when it recorded the per-frame allocations as
+    /// outstanding.
+    pub fn creations(&self) -> u32 {
+        self.instanced.creations() + self.debug.creations() + self.cull.creations()
     }
 
     /// Replaces the overlay renderer with one built for `format`.
