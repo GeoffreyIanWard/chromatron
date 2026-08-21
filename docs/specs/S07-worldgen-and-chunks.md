@@ -340,6 +340,30 @@ layer.
 Steps 8–9 remain, plus the rest of step 7: biome assignment, scatter, floodplain masks,
 traversability, and water body extents.
 
+**The generation pool and frontier.** `cx_worldgen::pool::GenerationPool` and
+`cx_worldgen::frontier` — generation off the tick thread, aimed ahead of the camera.
+
+The pool is **one worker, not eight**, because the memory arithmetic already settled it:
+one in-flight block peaks at ~0.71 GB against a 0.8 GB budget, so the cores go *inside*
+each block (the row-band parallelism) and blocks are made one at a time. The tick thread's
+whole interface is non-blocking: hand over a want-list, poll for finished blocks.
+
+The want-list is **replaced, not appended to** — the frontier recomputes priorities every
+time the camera moves, so one-off requests would go stale the moment it turned. A block
+that drops off the list before the worker reaches it is never made; the one mid-generation
+finishes and is delivered anyway. Delivered blocks are remembered so the frontier can
+resend its list every frame without duplicating 44 seconds of work — that race is real and
+has a test.
+
+The frontier is pure arithmetic, testable without threads: the want-list centres on where
+the camera *will be* (position + velocity × a lead time sized to generation cost), always
+starts with the ground underfoot, and at speed fills the whole line of travel rather than
+just the destination — skipping the middle would generate where the camera is going while
+it falls into ungenerated ground on the way.
+
+Still open toward the "200 m/s, frontier never outrun" criterion: wiring pool + frontier +
+chunk lifecycle into the running app, which is where that gets measured for real.
+
 **The block cache.** `cx_worldgen::cache::BlockCache` — generate once, reload from disk
 after. An entry stores only the carved ground surface (~100 MB, inside the budgeted
 100–200 MB per block): the final terrain is that surface with its basins refilled and the

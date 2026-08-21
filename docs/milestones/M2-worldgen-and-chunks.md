@@ -119,6 +119,10 @@ affordable to have both.
   read 100 MB + re-route). Stores only the ground surface; terrain and drainage are
   recomputed on load, bit-identically. The delete-and-replay exit criterion is a test.
 
+- **The generation pool and frontier** — `cx_worldgen::pool` + `frontier`. One background
+  worker (memory-bounded, cores go inside the block), non-blocking want-list/poll interface,
+  look-ahead prioritisation. The 200 m/s traversal criterion still needs app integration.
+
 ## Notes
 
 **The seam question gets answered here, visually.** Fine erosion detail cannot be perfectly continuous across block boundaries with a finite halo. Rivers should stay coherent because region-level drainage constrains them from above — verify that first, since it is the failure that would actually be noticeable. If hillside detail shows a visible seam, the mitigations in order of preference are a wider halo, fewer iterations with stronger per-iteration effect, or a post-pass seam blend.
