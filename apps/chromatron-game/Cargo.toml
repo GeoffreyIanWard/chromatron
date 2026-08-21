@@ -13,6 +13,7 @@ cx-core.workspace = true
 cx-ecs.workspace = true
 cx-render.workspace = true
 cx-view.workspace = true
+cx-worldgen.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

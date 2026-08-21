@@ -249,7 +249,7 @@ pub fn run<F>(
     before_frame: F,
 ) -> Result<(), AppError>
 where
-    F: FnMut(&mut FrameLoop),
+    F: FnMut(&mut FrameLoop, &mut FlyCamera, f32),
 {
     let event_loop = EventLoop::new().map_err(|source| AppError::EventLoop {
         reason: source.to_string(),
@@ -314,10 +314,16 @@ struct Active {
 
 struct WindowedApp<F> {
     config: WindowConfig,
-    /// Called once per frame, before anything is drawn.
+    /// Called once per frame, before anything is drawn, with the camera and
+    /// the real seconds since the previous frame.
     ///
-    /// Where a client queues its debug geometry. A hook rather than a retained
-    /// list because debug draw is immediate mode — see [`crate::frame::FrameLoop::debug`].
+    /// Where a client queues its debug geometry and drives anything that
+    /// follows the camera — the chunk lifecycle, above all. The camera is
+    /// mutable so a client can reposition it from what streaming terrain
+    /// reveals (the demo lifts the spawn above the first ground that
+    /// arrives). A hook rather
+    /// than a retained list because debug draw is immediate mode — see
+    /// [`crate::frame::FrameLoop::debug`].
     before_frame: F,
     frame_loop: FrameLoop,
     world: SimWorld,
@@ -350,7 +356,7 @@ struct WindowedApp<F> {
     looking: bool,
 }
 
-impl<F: FnMut(&mut FrameLoop)> WindowedApp<F> {
+impl<F: FnMut(&mut FrameLoop, &mut FlyCamera, f32)> WindowedApp<F> {
     /// Creates the window and its surface.
     fn activate(&mut self, event_loop: &ActiveEventLoop) -> Result<Active, AppError> {
         let attributes = Window::default_attributes()
@@ -428,6 +434,8 @@ impl<F: FnMut(&mut FrameLoop)> WindowedApp<F> {
             tick = self.frame_loop.tick().0,
             instances = report.extracted,
             draw_calls = report.draw.map_or(0, |stats| stats.draw_calls),
+            terrain_chunks = report.terrain.chunks,
+            terrain_triangles = report.terrain.triangles,
             // Skipped frames counted rather than logged individually: an
             // occluded window produces tens of thousands a second, and a line
             // each would be the only thing in the log.
@@ -454,7 +462,7 @@ impl<F: FnMut(&mut FrameLoop)> WindowedApp<F> {
 
         // Before anything else, so the client's debug geometry is queued in time
         // to be rebased and drawn with this frame rather than the next one.
-        (self.before_frame)(&mut self.frame_loop);
+        (self.before_frame)(&mut self.frame_loop, &mut self.camera, delta.as_secs_f32());
 
         let (overlay, actions) = self.build_overlay(delta);
 
@@ -580,7 +588,7 @@ impl<F: FnMut(&mut FrameLoop)> WindowedApp<F> {
     }
 }
 
-impl<F: FnMut(&mut FrameLoop)> ApplicationHandler for WindowedApp<F> {
+impl<F: FnMut(&mut FrameLoop, &mut FlyCamera, f32)> ApplicationHandler for WindowedApp<F> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         // Called again after a suspend on some platforms, so this must not
         // create a second window.

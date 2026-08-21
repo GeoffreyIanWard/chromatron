@@ -205,6 +205,8 @@ impl std::fmt::Debug for InstancedRenderer {
 /// parameters they were the seventh and eighth argument of a function that had
 /// already been split once for the same reason.
 pub(crate) struct OffscreenExtras<'a> {
+    /// The terrain renderer, when there are chunk meshes to draw.
+    pub terrain: Option<&'a mut crate::terrain::TerrainRenderer>,
     /// The debug-line renderer, when there are lines to draw.
     pub debug: Option<&'a mut DebugRenderer>,
     /// The overlay renderer and this frame's output.
@@ -563,7 +565,7 @@ impl InstancedRenderer {
         instances: &[ExtractedInstance],
         clear: Rgba,
     ) -> Result<(Readback, DrawStats), RenderError> {
-        let (readback, stats, _, _) = self.render_to_format(
+        let (readback, stats, _, _, _) = self.render_to_format(
             render_device,
             OffscreenTarget {
                 width,
@@ -577,6 +579,7 @@ impl InstancedRenderer {
             },
             clear,
             OffscreenExtras {
+                terrain: None,
                 debug: None,
                 overlay: None,
             },
@@ -600,8 +603,21 @@ impl InstancedRenderer {
         contents: FrameContents<'_>,
         clear: Rgba,
         extras: OffscreenExtras<'_>,
-    ) -> Result<(Readback, DrawStats, DebugStats, crate::ui::UiStats), RenderError> {
-        let OffscreenExtras { debug, overlay } = extras;
+    ) -> Result<
+        (
+            Readback,
+            DrawStats,
+            crate::terrain::TerrainStats,
+            DebugStats,
+            crate::ui::UiStats,
+        ),
+        RenderError,
+    > {
+        let OffscreenExtras {
+            terrain,
+            debug,
+            overlay,
+        } = extras;
 
         let OffscreenTarget {
             width,
@@ -655,7 +671,34 @@ impl InstancedRenderer {
             },
         );
 
-        // Debug lines after the scene, on top of it, sharing its depth.
+        // Terrain after the scene: it loads the colour and depth the scene
+        // pass produced and draws into the same picture.
+        let terrain_stats = match terrain {
+            Some(terrain) => {
+                // Cloned rather than borrowed: the handle is refcounted, and a
+                // borrow would pin the renderer this is about to encode with.
+                let terrain_pipeline = if format == crate::offscreen::TARGET_FORMAT {
+                    terrain.pipeline().clone()
+                } else {
+                    terrain.pipeline_for(device, format)
+                };
+                terrain.encode(
+                    render_device,
+                    &mut encoder,
+                    &terrain_pipeline,
+                    crate::terrain::TerrainPass {
+                        target: &colour_view,
+                        depth: &depth_view,
+                        width,
+                        height,
+                        camera,
+                    },
+                )
+            }
+            None => crate::terrain::TerrainStats::default(),
+        };
+
+        // Debug lines after the terrain, on top of it, sharing its depth.
         let debug_stats = match debug {
             Some(debug) => {
                 debug.upload(device, queue, contents.debug);
@@ -709,7 +752,7 @@ impl InstancedRenderer {
             height,
         )?;
 
-        Ok((readback, stats, debug_stats, ui_stats))
+        Ok((readback, stats, terrain_stats, debug_stats, ui_stats))
     }
 }
 

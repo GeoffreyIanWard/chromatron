@@ -27,6 +27,7 @@ use crate::error::RenderError;
 use crate::frame::{FrameContents, FrameRenderer};
 use crate::instanced::{DrawCall, DrawStats, create_depth_target};
 use crate::offscreen::Rgba;
+use crate::terrain::{TerrainPass, TerrainStats};
 use crate::ui::UiStats;
 use cx_ui::UiOutput;
 
@@ -75,8 +76,8 @@ impl SkipReason {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Presented {
     /// The frame was drawn and handed to the compositor, with what the scene,
-    /// the debug lines, and the overlay each cost.
-    Drawn(DrawStats, DebugStats, UiStats),
+    /// the terrain, the debug lines, and the overlay each cost.
+    Drawn(DrawStats, TerrainStats, DebugStats, UiStats),
     /// The frame was skipped.
     Skipped(SkipReason),
 }
@@ -150,7 +151,9 @@ pub struct WindowSurface {
     // window found the difference the hard way: macOS presents
     // `Bgra8UnormSrgb`, and a mismatched pipeline is a fatal validation error.
     pipeline: wgpu::RenderPipeline,
-    /// The debug-line pipeline, for the same format and the same reason.
+    /// The terrain pipeline, for the same format and the same reason.
+    terrain_pipeline: wgpu::RenderPipeline,
+    /// The debug-line pipeline, likewise.
     debug_pipeline: wgpu::RenderPipeline,
 }
 
@@ -232,6 +235,9 @@ impl WindowSurface {
         let pipeline = renderer
             .instanced()
             .pipeline_for(device.wgpu_device(), config.format);
+        let terrain_pipeline = renderer
+            .terrain()
+            .pipeline_for(device.wgpu_device(), config.format);
         let debug_pipeline = renderer
             .debug()
             .pipeline_for(device.wgpu_device(), config.format);
@@ -245,6 +251,7 @@ impl WindowSurface {
             config,
             depth,
             pipeline,
+            terrain_pipeline,
             debug_pipeline,
         })
     }
@@ -398,6 +405,20 @@ impl WindowSurface {
             },
         );
 
+        // Terrain over the scene, sharing its depth, before the annotations.
+        let terrain_stats = renderer.terrain_mut().encode(
+            device,
+            &mut encoder,
+            &self.terrain_pipeline,
+            TerrainPass {
+                target: &view,
+                depth: &self.depth,
+                width: self.config.width,
+                height: self.config.height,
+                camera,
+            },
+        );
+
         // Debug lines last, so they land on top of the scene they annotate.
         renderer
             .debug_mut()
@@ -439,7 +460,12 @@ impl WindowSurface {
         // the frame.
         queue.present(frame);
 
-        Ok(Presented::Drawn(stats, debug_stats, ui_stats))
+        Ok(Presented::Drawn(
+            stats,
+            terrain_stats,
+            debug_stats,
+            ui_stats,
+        ))
     }
 }
 
@@ -522,7 +548,7 @@ mod tests {
         );
         let debug_vertices = debug.rebase(ChunkCoord::new(0, 0)).to_vec();
 
-        let (bgra, stats, debug_stats, _) = renderer
+        let (bgra, stats, _, debug_stats, _) = renderer
             .render_to_format(
                 &device,
                 OffscreenTarget {
@@ -537,6 +563,7 @@ mod tests {
                 },
                 clear,
                 crate::instanced::OffscreenExtras {
+                    terrain: None,
                     debug: Some(&mut debug_renderer),
                     overlay: None,
                 },
@@ -545,7 +572,7 @@ mod tests {
         assert_eq!(stats.draw_calls, 1);
         assert_eq!(debug_stats.lines, 12, "an AABB is twelve lines");
 
-        let (rgba, _, _, _) = renderer
+        let (rgba, _, _, _, _) = renderer
             .render_to_format(
                 &device,
                 OffscreenTarget {
@@ -560,6 +587,7 @@ mod tests {
                 },
                 clear,
                 crate::instanced::OffscreenExtras {
+                    terrain: None,
                     debug: Some(&mut debug_renderer),
                     overlay: None,
                 },

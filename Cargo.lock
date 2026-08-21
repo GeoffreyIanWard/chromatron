@@ -599,6 +599,7 @@ dependencies = [
  "cx-ecs",
  "cx-render",
  "cx-view",
+ "cx-worldgen",
  "tracing",
  "tracing-subscriber",
 ]

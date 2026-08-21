@@ -38,6 +38,7 @@ pub mod offscreen;
 pub mod palette;
 mod pool;
 pub mod surface;
+pub mod terrain;
 pub mod testing;
 pub mod ui;
 
@@ -53,4 +54,5 @@ pub use mesh::{MeshData, Vertex};
 pub use offscreen::{Readback, Rgba};
 pub use palette::Palette;
 pub use surface::{Presented, SkipReason, WindowSurface, WindowTarget};
+pub use terrain::{TerrainMeshData, TerrainRenderer, TerrainStats, TerrainVertex};
 pub use ui::{UiRenderer, UiStats};
