@@ -167,7 +167,9 @@ impl Drop for GenerationPool {
 /// fields — never across generation — so a panic mid-lock leaves nothing
 /// half-updated worth being poisoned about.
 fn lock(mutex: &Mutex<WantState>) -> std::sync::MutexGuard<'_, WantState> {
-    mutex.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn worker_loop(

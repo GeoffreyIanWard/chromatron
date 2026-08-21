@@ -172,10 +172,7 @@ mod tests {
 
         let position_of = |x: i32| wanted.iter().position(|b| *b == BlockCoord::new(x, 0));
         if let (Some(east), Some(west)) = (position_of(1), position_of(-1)) {
-            assert!(
-                east < west,
-                "the block ahead ranks behind the block behind"
-            );
+            assert!(east < west, "the block ahead ranks behind the block behind");
         }
     }
 

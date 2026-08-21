@@ -43,8 +43,8 @@ pub mod hardness;
 pub mod hydraulic;
 pub mod module;
 pub(crate) mod parallel;
-pub mod pool;
 pub mod pipeline;
+pub mod pool;
 pub mod thermal;
 pub mod worldmap;
 
