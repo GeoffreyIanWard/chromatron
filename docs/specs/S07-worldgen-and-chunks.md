@@ -340,6 +340,30 @@ layer.
 Steps 8–9 remain, plus the rest of step 7: biome assignment, scatter, floodplain masks,
 traversability, and water body extents.
 
+**The chunk state machine.** `cx_worldgen::lifecycle::ChunkLifecycle` — the piece where
+frontier, pool, and cache meet. Chunks hold data proportional to how close they are:
+
+| State | Resident | Cost |
+|---|---|---|
+| Generated / Dormant | a ~64 B summary (min/max height, water fraction) | negligible |
+| Coarse | 128x128 downsampled heights | 64 KB |
+| Active | full baked elevation + slope/aspect | ~6 MB |
+
+Everything is amortized: a few promotions and demotions per tick, nearest-first up and
+farthest-first down, under an Active cap — walking into a new region never bakes 25 chunks
+in one frame. The integration tests hold the budgets on *every tick*, not on average, and
+the 10,000-Dormant-chunks criterion is counted in bytes (about 3 MB, against 200 budgeted).
+
+Blocks are heavy (~430 MB resident even after shedding erosion-only data), so at most two
+stay in memory, least-recently-needed evicted first; the disk cache brings one back in
+seconds. A chunk whose block is not resident simply waits a tick.
+
+**Deliberately not decided here**: which tick a chunk activates on depends on disk and CPU
+speed, so it is not reproducible across machines — fine for rendering, not for simulation.
+Before sim state may depend on chunk contents, activation must either be recorded for
+replay or gated deterministically. That is persistence work (S13), recorded now so it is a
+decision rather than a surprise.
+
 **The generation pool and frontier.** `cx_worldgen::pool::GenerationPool` and
 `cx_worldgen::frontier` — generation off the tick thread, aimed ahead of the camera.
 

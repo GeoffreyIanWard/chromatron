@@ -41,23 +41,36 @@ fn workers() -> usize {
         .min(BANDS)
 }
 
-/// Fills a row-major grid in parallel: `fill(z, row)` writes one row.
-///
-/// Each band owns a disjoint slice of `out`, so bands cannot race, and each
-/// cell's value depends only on `fill` and its coordinates — thread assignment
-/// cannot reach the arithmetic.
+/// Fills a block-sized row-major grid in parallel: `fill(z, row)` writes one
+/// row of [`EDGE`] cells.
 pub(crate) fn fill_grid<T, F>(out: &mut [T], fill: F)
 where
     T: Send,
     F: Fn(u32, &mut [T]) + Sync,
 {
-    let rows = EDGE as usize;
-    let per_band = rows.div_ceil(BANDS);
+    fill_rows(out, EDGE as usize, fill);
+}
 
-    let mut bands: Vec<(usize, &mut [T])> = out
-        .chunks_mut(per_band * EDGE as usize)
-        .enumerate()
-        .collect();
+/// Fills any row-major grid in parallel: `fill(z, row)` writes one row of
+/// `width` cells. Rows come from `out.len() / width`.
+///
+/// Each band owns a disjoint slice of `out`, so bands cannot race, and each
+/// cell's value depends only on `fill` and its coordinates — thread assignment
+/// cannot reach the arithmetic. The band count stays fixed regardless of grid
+/// size, so a chunk-sized grid (1024 rows) and a block-sized one (5120) both
+/// keep the same-bits-at-any-thread-count guarantee.
+pub(crate) fn fill_rows<T, F>(out: &mut [T], width: usize, fill: F)
+where
+    T: Send,
+    F: Fn(u32, &mut [T]) + Sync,
+{
+    if width == 0 {
+        return;
+    }
+    let rows = out.len() / width;
+    let per_band = rows.div_ceil(BANDS).max(1);
+
+    let mut bands: Vec<(usize, &mut [T])> = out.chunks_mut(per_band * width).enumerate().collect();
 
     std::thread::scope(|scope| {
         let workers = workers();
@@ -77,9 +90,9 @@ where
         for list in per_worker {
             scope.spawn(move || {
                 for (band, slice) in list {
-                    let (start, _) = band_rows_for(band, per_band);
-                    for (offset, row) in slice.chunks_mut(EDGE as usize).enumerate() {
-                        fill(start + offset as u32, row);
+                    let start = band * per_band;
+                    for (offset, row) in slice.chunks_mut(width).enumerate() {
+                        fill((start + offset) as u32, row);
                     }
                 }
             });

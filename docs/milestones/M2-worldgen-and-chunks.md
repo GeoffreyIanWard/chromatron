@@ -32,7 +32,7 @@ An effectively infinite world, deterministically generated from a seed, eroded o
 | Flow continuity walk over 100 km of channel | unbroken across chunk *and* block seams |
 | Camera traversal at 200 m/s | frontier never outrun, no frame > 20 ms |
 | Delete block cache, replay | identical world state — **met**, bit-equality test in `cx_worldgen::cache` |
-| 10,000 generated chunks resident as `Dormant` | within memory budget |
+| 10,000 generated chunks resident as `Dormant` | within memory budget — **met**, counted in bytes (~3 MB vs 200) |
 | `no-erosion` profile | generates a valid world; differs from `full-sim` only in terrain shape |
 
 ## Resolved before starting: the erosion grid
@@ -122,6 +122,12 @@ affordable to have both.
 - **The generation pool and frontier** — `cx_worldgen::pool` + `frontier`. One background
   worker (memory-bounded, cores go inside the block), non-blocking want-list/poll interface,
   look-ahead prioritisation. The 200 m/s traversal criterion still needs app integration.
+
+- **The chunk state machine** — `cx_worldgen::lifecycle`. Amortized promotion/demotion under
+  an Active cap, four residency levels, two-block memory ceiling. Budgets tested per-tick;
+  the Dormant memory criterion is met by counting. The 200 m/s traversal runs headless over
+  cached terrain; the in-app measurement still needs render integration.
+- **CI**: the 20-minute worldgen gate now skips PRs that touch nothing terrain-shaping.
 
 ## Notes
 
