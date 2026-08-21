@@ -145,7 +145,8 @@ pub fn generate_block(seed: u64, block: BlockCoord, settings: WorldSettings) -> 
 
     // 2 and 3. Fill, route, and erode. `erode` runs the fill itself, because
     // erosion needs drainage and re-routes between rounds anyway.
-    let (eroded, network, erosion) = crate::hydraulic::erode(elevation, settings.erosion);
+    let (eroded, network, erosion) =
+        crate::hydraulic::erode(elevation, seed, coordinates, settings.erosion);
 
     // 4. Talus relaxation.
     let (relaxed, thermal) = crate::thermal::relax(eroded, settings.thermal);

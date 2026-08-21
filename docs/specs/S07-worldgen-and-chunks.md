@@ -284,6 +284,15 @@ grows downstream, so a channel bed cannot rise along its own length; and banks a
 parabolic profile rather than a step, so there is no wall to pond behind. The network is
 rebuilt afterwards and interior sinks are counted — zero, on the fixture and on a block.
 
+**Rock hardness.** `cx_worldgen::hardness` — erodibility varied by place instead of one
+constant for the whole world. Soft rock opens into wide valleys, hard rock resists and
+stands as ridges and cliff bands. Positional noise like everything else, so a hard band
+crossing a block seam is the same rock on both sides. One byte per cell (26 MB per block);
+`contrast: 1.0` reproduces the old uniform world exactly, which keeps every earlier test's
+claim intact. Not yet a full material system — no named rock types — but a later material
+model replaces the *source* of this multiplier without changing how erosion consumes it.
+Thermal erosion's talus angle and carving's channel shape are natural future consumers.
+
 **Step 4: thermal erosion.** `cx_worldgen::thermal` — talus-angle relaxation, read-then-write
 so a cell's result cannot depend on sweep order. Mass is conserved and tested as such:
 the failure mode is a stray factor that quietly adds or removes material every round,

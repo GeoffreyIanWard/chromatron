@@ -124,6 +124,10 @@ pub struct ErosionSettings {
     /// Timestep per round. Unconditionally stable, so this sets how far the
     /// landscape evolves rather than whether the solve survives.
     pub timestep: f32,
+    /// How rock hardness varies by place ([`crate::hardness`]).
+    ///
+    /// `HardnessSettings::UNIFORM` reproduces the old single-constant world.
+    pub hardness: crate::hardness::HardnessSettings,
     /// Erosion rounds. Each is one implicit solve plus one re-route.
     ///
     /// Zero is the `no-erosion` profile: the surface comes back untouched, and
@@ -143,6 +147,7 @@ impl ErosionSettings {
         erodibility: 4.0e-5,
         area_exponent: 0.5,
         timestep: 2.0e4,
+        hardness: crate::hardness::HardnessSettings::DEFAULT,
         rounds: 12,
     };
 }
@@ -154,6 +159,7 @@ impl ErosionSettings {
         erodibility: 0.0,
         area_exponent: 0.5,
         timestep: 0.0,
+        hardness: crate::hardness::HardnessSettings::UNIFORM,
         rounds: 0,
     };
 }
@@ -183,8 +189,14 @@ pub struct ErosionReport {
 /// recomputing it would repeat the most expensive part of this function.
 pub fn erode(
     elevation: BlockGrid,
+    seed: u64,
+    block: crate::block::BlockCoordinates,
     settings: ErosionSettings,
 ) -> (BlockGrid, FlowNetwork, ErosionReport) {
+    // Sampled once and reused every round: hardness is a property of the rock,
+    // not of the eroding surface, so it never needs recomputing mid-run.
+    let hardness = crate::hardness::HardnessMap::for_block(seed, block, settings.hardness);
+
     let mut network = FlowNetwork::build(elevation);
 
     // The baseline is the **filled** surface, not the raw one. Step 2 runs
@@ -194,7 +206,7 @@ pub fn erode(
     let before = network.filled().clone();
 
     for _ in 0..settings.rounds {
-        let eroded = incise(&network, settings);
+        let eroded = incise(&network, &hardness, settings);
 
         // Re-route against the surface erosion just produced. Skipping this
         // freezes channels where the unerodedated noise put them; capture — one
@@ -240,7 +252,11 @@ pub fn erode(
 /// The receivers are already solved when a cell is reached, because
 /// [`crate::flow::FlowNetwork::drainage_order`] is a topological order over the
 /// same multi-receiver graph the shares come from.
-fn incise(network: &FlowNetwork, settings: ErosionSettings) -> BlockGrid {
+fn incise(
+    network: &FlowNetwork,
+    hardness: &crate::hardness::HardnessMap,
+    settings: ErosionSettings,
+) -> BlockGrid {
     let mut surface = network.filled().clone();
 
     for index in network.drainage_order().iter().rev() {
@@ -255,8 +271,12 @@ fn incise(network: &FlowNetwork, settings: ErosionSettings) -> BlockGrid {
         // `ADR-0015` is free to change.
         let area = f64::from(network.accumulation(cell))
             * f64::from(cx_core::math::EROSION_CELL_SIZE).powi(2);
+        // Erodibility scaled by the rock under this cell. Soft ground gives
+        // way faster, hard ground resists — this one factor is where valley
+        // width, cliff bands, and (eventually) waterfall steps come from.
         let common = f64::from(settings.timestep)
             * f64::from(settings.erodibility)
+            * f64::from(hardness.multiplier(cell))
             * area.powf(f64::from(settings.area_exponent));
 
         let mut weight_sum = 0.0f64;
@@ -343,8 +363,17 @@ mod tests {
         erodibility: 4.0e-5,
         area_exponent: 0.5,
         timestep: 2.0e4,
+        // Uniform, so these tests keep making the claims they were written to
+        // make — about the solve, not about rock variation. Hardness has its
+        // own test below and its own module tests.
+        hardness: crate::hardness::HardnessSettings::UNIFORM,
         rounds: 4,
     };
+
+    /// Every test erodes the same nominal block.
+    fn at_origin() -> crate::block::BlockCoordinates {
+        crate::block::BlockCoordinates::new(cx_core::math::BlockCoord::new(0, 0))
+    }
 
     /// A tilted plane with noise on it, small enough to erode quickly.
     fn rough_slope() -> BlockGrid {
@@ -372,7 +401,7 @@ mod tests {
     #[test]
     fn zero_rounds_changes_nothing_the_fill_did_not() {
         let filled = FlowNetwork::build(rough_slope()).filled().clone();
-        let (after, _, report) = erode(rough_slope(), ErosionSettings::NONE);
+        let (after, _, report) = erode(rough_slope(), 7, at_origin(), ErosionSettings::NONE);
 
         assert_eq!(report.rounds, 0);
         assert_eq!(report.mean_lowering, 0.0, "no-erosion removed material");
@@ -396,7 +425,7 @@ mod tests {
     #[test]
     fn nothing_is_ever_raised_by_erosion() {
         let filled = FlowNetwork::build(rough_slope()).filled().clone();
-        let (after, _, report) = erode(rough_slope(), TEST_SETTINGS);
+        let (after, _, report) = erode(rough_slope(), 7, at_origin(), TEST_SETTINGS);
 
         assert!(
             report.mean_lowering > 0.0,
@@ -434,7 +463,7 @@ mod tests {
             rounds: 3,
             ..TEST_SETTINGS
         };
-        let (after, network, report) = erode(rough_slope(), settings);
+        let (after, network, report) = erode(rough_slope(), 7, at_origin(), settings);
 
         assert_eq!(
             report.interior_sinks, 0,
@@ -482,8 +511,8 @@ mod tests {
             ..TEST_SETTINGS
         };
 
-        let (_, _, gentle_report) = erode(rough_slope(), gentle);
-        let (_, _, fierce_report) = erode(rough_slope(), fierce);
+        let (_, _, gentle_report) = erode(rough_slope(), 7, at_origin(), gentle);
+        let (_, _, fierce_report) = erode(rough_slope(), 7, at_origin(), fierce);
 
         assert!(
             fierce_report.mean_lowering > gentle_report.mean_lowering * 1.5,
@@ -491,6 +520,61 @@ mod tests {
              parameter is barely connected to the result",
             fierce_report.mean_lowering,
             gentle_report.mean_lowering
+        );
+    }
+
+    /// Soft rock loses more material than hard rock on the same terrain.
+    ///
+    /// This is the test that proves the hardness map is actually wired into
+    /// the solve. Every other test here uses UNIFORM hardness, so without this
+    /// one, the multiplier could be dropped on the floor and nothing would
+    /// notice.
+    #[test]
+    fn softer_ground_erodes_faster_than_harder_ground() {
+        let settings = ErosionSettings {
+            hardness: crate::hardness::HardnessSettings {
+                contrast: 16.0,
+                ..crate::hardness::HardnessSettings::DEFAULT
+            },
+            ..TEST_SETTINGS
+        };
+
+        let before = FlowNetwork::build(rough_slope()).filled().clone();
+        let (after, _, _) = erode(rough_slope(), 7, at_origin(), settings);
+
+        let map = crate::hardness::HardnessMap::for_block(7, at_origin(), settings.hardness);
+
+        // Split sampled cells into the softest and hardest thirds and compare
+        // average material lost. The terrain fixture is the same everywhere,
+        // so any systematic difference between the groups is the rock.
+        let mut soft = (0.0f64, 0u32);
+        let mut hard = (0.0f64, 0u32);
+
+        for z in (0..EDGE).step_by(17) {
+            for x in (0..EDGE).step_by(17) {
+                let Some(cell) = ErosionCell::new(x, z) else {
+                    continue;
+                };
+                let lost = f64::from(before.get(cell) - after.get(cell));
+                match map.hardness(cell) {
+                    0..=85 => soft = (soft.0 + lost, soft.1 + 1),
+                    170..=255 => hard = (hard.0 + lost, hard.1 + 1),
+                    _ => {}
+                }
+            }
+        }
+
+        assert!(
+            soft.1 > 100 && hard.1 > 100,
+            "not enough of each rock type sampled"
+        );
+        let soft_mean = soft.0 / f64::from(soft.1);
+        let hard_mean = hard.0 / f64::from(hard.1);
+
+        assert!(
+            soft_mean > hard_mean * 1.5,
+            "soft ground lost {soft_mean:.3} m against hard ground's {hard_mean:.3} m \
+             — the hardness map is not reaching the solve"
         );
     }
 
@@ -502,7 +586,7 @@ mod tests {
     #[test]
     fn incision_follows_drainage_rather_than_being_uniform() {
         let before = FlowNetwork::build(rough_slope()).filled().clone();
-        let (after, network, _) = erode(rough_slope(), TEST_SETTINGS);
+        let (after, network, _) = erode(rough_slope(), 7, at_origin(), TEST_SETTINGS);
 
         let mut channel_loss = (0.0f64, 0u32);
         let mut slope_loss = (0.0f64, 0u32);
