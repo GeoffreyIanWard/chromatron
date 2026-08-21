@@ -229,6 +229,16 @@ impl FlowNetwork {
         }
     }
 
+    /// Drops the drainage-order list, reclaiming ~100 MB.
+    ///
+    /// The order exists for the erosion solve and nothing after it. A block
+    /// held resident for chunk extraction never walks it again, and keeping it
+    /// would cost a quarter of the block's residency footprint for data with
+    /// no remaining reader. [`Self::drainage_order`] returns empty afterwards.
+    pub fn shed_erosion_order(&mut self) {
+        self.order = Vec::new();
+    }
+
     /// Cells in drainage order — everything upstream of a cell comes before it.
     ///
     /// Erosion walks this **backwards**, so a cell is always solved after the

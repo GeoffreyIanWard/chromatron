@@ -147,8 +147,17 @@ pub fn derive_fields(elevation: &ChunkElevation) -> DerivedFields {
             .unwrap_or(0.0)
     };
 
-    for z in 0..CELLS_PER_CHUNK_EDGE {
-        for x in 0..CELLS_PER_CHUNK_EDGE {
+    // Row-parallel, in one pass over an interleaved pair per cell that is
+    // split afterwards. Two separate passes would be simpler but would compute
+    // every gradient twice; interleaving keeps the arithmetic single-pass and
+    // still gives each band a disjoint output slice. Derivation sits on the
+    // chunk-promotion path now, where a million atan calls single-threaded
+    // showed up directly in the worst frame time (22.5 ms against a 20 ms
+    // target on the traversal exercise).
+    let mut pairs = vec![[0u8, ASPECT_FLAT]; CELLS_PER_CHUNK as usize];
+    crate::parallel::fill_rows(&mut pairs, CELLS_PER_CHUNK_EDGE as usize, |z, row| {
+        for (x, out) in row.iter_mut().enumerate() {
+            let x = x as u32;
             // Central differences, clamped at the rim. The span is two cells
             // wide except on the rim, where it is one — so the divisor has to
             // follow, or edge cells report double their real gradient.
@@ -172,12 +181,9 @@ pub fn derive_fields(elevation: &ChunkElevation) -> DerivedFields {
             let magnitude = (dx * dx + dz * dz).sqrt();
             let degrees = magnitude.atan().to_degrees();
 
-            let Some(slot) = slope.get_mut(index(x, z).unwrap_or(0)) else {
-                continue;
-            };
             // Saturating: a near-vertical face pins at the top rather than
             // wrapping to zero and reading as level ground.
-            *slot = ((degrees / SLOPE_STEP_DEGREES).round().clamp(0.0, 254.0)) as u8;
+            out[0] = ((degrees / SLOPE_STEP_DEGREES).round().clamp(0.0, 254.0)) as u8;
 
             if degrees < FLAT_SLOPE_DEGREES {
                 continue;
@@ -193,11 +199,16 @@ pub fn derive_fields(elevation: &ChunkElevation) -> DerivedFields {
             } else {
                 bearing
             };
+            out[1] = ((bearing / ASPECT_STEP_DEGREES).round() as u32 % 255) as u8;
+        }
+    });
 
-            if let Some(slot) = aspect.get_mut(index(x, z).unwrap_or(0)) {
-                let quantised = (bearing / ASPECT_STEP_DEGREES).round() as u32 % 255;
-                *slot = quantised as u8;
-            }
+    for (index, [s, a]) in pairs.iter().enumerate() {
+        if let Some(slot) = slope.get_mut(index) {
+            *slot = *s;
+        }
+        if let Some(slot) = aspect.get_mut(index) {
+            *slot = *a;
         }
     }
 

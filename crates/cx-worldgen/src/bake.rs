@@ -167,10 +167,14 @@ pub fn bake_chunk(
     let corner_x = world_x0 - EROSION_CELL_SIZE / 2.0;
     let corner_z = world_z0 - EROSION_CELL_SIZE / 2.0;
 
-    let mut cells = Vec::with_capacity(CELLS_PER_CHUNK as usize);
-
-    for z in 0..CELLS_PER_CHUNK_EDGE {
-        for x in 0..CELLS_PER_CHUNK_EDGE {
+    // Row-parallel: every output cell reads only shared, immutable inputs, so
+    // this is the same shape as elevation sampling — and baking is now on the
+    // chunk-promotion path, where its latency lands inside a frame budget
+    // rather than inside a background job.
+    let mut cells = vec![0.0f32; CELLS_PER_CHUNK as usize];
+    crate::parallel::fill_rows(&mut cells, CELLS_PER_CHUNK_EDGE as usize, |z, row| {
+        for (x, out) in row.iter_mut().enumerate() {
+            let x = x as u32;
             // Where this field cell's centre sits on the erosion grid, in
             // fractional erosion cells from the block's own origin.
             let offset_x = (x as f32 + 0.5) * CELL_SIZE / EROSION_CELL_SIZE;
@@ -200,9 +204,9 @@ pub fn bake_chunk(
             let world_x = corner_x + (x as f32 + 0.5) * CELL_SIZE;
             let world_z = corner_z + (z as f32 + 0.5) * CELL_SIZE;
 
-            cells.push(height + detail(generator, world_x, world_z, settings) * scale);
+            *out = height + detail(generator, world_x, world_z, settings) * scale;
         }
-    }
+    });
 
     Some(ChunkElevation { cells })
 }
