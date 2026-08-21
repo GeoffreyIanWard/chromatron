@@ -59,7 +59,7 @@ pub use flow::{FlowNetwork, NO_FLOW};
 pub use frontier::{FrontierSettings, wanted_blocks};
 pub use hardness::{HardnessMap, HardnessSettings};
 pub use hydraulic::{ErosionReport, ErosionSettings, erode};
-pub use lifecycle::{ChunkLifecycle, LifecycleReport, LifecycleSettings, Residency};
+pub use lifecycle::{COARSE_EDGE, ChunkLifecycle, LifecycleReport, LifecycleSettings, Residency};
 pub use module::{ELEVATION, UNGENERATED, Worldgen, WorldgenModule, generate_elevation};
 pub use pipeline::{BlockReport, GeneratedBlock, WorldSettings, generate_block};
 pub use pool::GenerationPool;

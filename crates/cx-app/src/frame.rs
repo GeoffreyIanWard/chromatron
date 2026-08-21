@@ -26,7 +26,7 @@ use cx_core::math::ChunkCoord;
 use cx_ecs::{SimSchedule, SimWorld};
 use cx_render::{
     Camera, DebugStats, DrawStats, FrameContents, FrameRenderer, MeshData, Presented, RenderDevice,
-    RenderError, SkipReason, UiStats, WindowSurface,
+    RenderError, SkipReason, TerrainMeshData, TerrainStats, UiStats, WindowSurface,
 };
 use cx_time::{CatchUp, PacedDriver, TickRate, TimeControl};
 use cx_ui::UiOutput;
@@ -47,6 +47,8 @@ pub struct FrameReport {
     pub extracted: usize,
     /// What the draw cost, when the frame drew.
     pub draw: Option<DrawStats>,
+    /// What the terrain cost, when the frame drew.
+    pub terrain: TerrainStats,
     /// What the debug lines cost, when the frame drew.
     pub debug: DebugStats,
     /// What the overlay cost, when the frame drew.
@@ -171,6 +173,28 @@ impl FrameLoop {
         &self.view
     }
 
+    /// Uploads (or replaces) one terrain chunk's mesh.
+    ///
+    /// Terrain is retained, unlike instances and debug lines: the mesh stays
+    /// resident and drawn until [`FrameLoop::remove_terrain_chunk`] drops it.
+    /// The chunk lifecycle decides when either happens; this is just the door
+    /// its decisions reach the GPU through.
+    pub fn upload_terrain_chunk(&mut self, chunk: ChunkCoord, mesh: &TerrainMeshData) {
+        self.renderer
+            .terrain_mut()
+            .upload(&self.device, chunk, mesh);
+    }
+
+    /// Drops one terrain chunk's mesh, if resident.
+    pub fn remove_terrain_chunk(&mut self, chunk: ChunkCoord) {
+        self.renderer.terrain_mut().remove(chunk);
+    }
+
+    /// How many terrain chunk meshes are resident on the GPU.
+    pub fn terrain_chunk_count(&self) -> usize {
+        self.renderer.terrain().chunk_count()
+    }
+
     /// Advances the simulation by whatever `real_delta` is due, then draws.
     ///
     /// Submits the draw without waiting for it. Reading pixels back would make
@@ -205,8 +229,9 @@ impl FrameLoop {
     ) -> Result<(FrameReport, cx_render::Readback), RenderError> {
         let produced = self.advance(world, schedule, real_delta);
 
-        let (readback, stats, debug, ui) = self.render_offscreen(camera, overlay)?;
+        let (readback, stats, terrain, debug, ui) = self.render_offscreen(camera, overlay)?;
         let mut report = self.report(produced, Some(stats));
+        report.terrain = terrain;
         report.debug = debug;
         report.ui = ui;
         self.debug.clear();
@@ -246,6 +271,11 @@ impl FrameLoop {
         let produced = self.advance(world, schedule, real_delta);
         let debug_vertices = self.debug.rebase(self.origin);
 
+        // The terrain rebases against the same origin the instances and debug
+        // lines were extracted with, or the two halves of the world drift
+        // apart by a chunk-multiple.
+        self.renderer.terrain_mut().set_origin(self.origin);
+
         let presented = surface.present(
             &self.device,
             &mut self.renderer,
@@ -260,8 +290,9 @@ impl FrameLoop {
 
         let mut report = self.report(produced, None);
         match presented {
-            Presented::Drawn(stats, debug, ui) => {
+            Presented::Drawn(stats, terrain, debug, ui) => {
                 report.draw = Some(stats);
+                report.terrain = terrain;
                 report.debug = debug;
                 report.ui = ui;
             }
@@ -315,7 +346,7 @@ impl FrameLoop {
     }
 
     fn draw(&mut self, camera: &Camera) -> Result<(DrawStats, DebugStats), RenderError> {
-        let (_, stats, debug, _) = self.render_offscreen(camera, None)?;
+        let (_, stats, _, debug, _) = self.render_offscreen(camera, None)?;
         self.debug.clear();
         Ok((stats, debug))
     }
@@ -325,8 +356,18 @@ impl FrameLoop {
         &mut self,
         camera: &Camera,
         overlay: Option<UiOutput>,
-    ) -> Result<(cx_render::Readback, DrawStats, DebugStats, UiStats), RenderError> {
+    ) -> Result<
+        (
+            cx_render::Readback,
+            DrawStats,
+            TerrainStats,
+            DebugStats,
+            UiStats,
+        ),
+        RenderError,
+    > {
         let debug_vertices = self.debug.rebase(self.origin);
+        self.renderer.terrain_mut().set_origin(self.origin);
 
         self.renderer.render_offscreen(
             &self.device,
@@ -347,6 +388,7 @@ impl FrameLoop {
             alpha: self.view.alpha(),
             extracted: self.view.len(),
             draw,
+            terrain: TerrainStats::default(),
             debug: DebugStats::default(),
             ui: UiStats::default(),
             skipped: None,

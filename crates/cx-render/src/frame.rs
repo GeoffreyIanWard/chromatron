@@ -23,6 +23,7 @@ use crate::error::RenderError;
 use crate::instanced::{DrawStats, InstancedRenderer, OffscreenTarget};
 use crate::mesh::MeshData;
 use crate::offscreen::{Readback, Rgba};
+use crate::terrain::{TerrainRenderer, TerrainStats};
 use crate::ui::{UiRenderer, UiStats};
 use cx_view::ExtractedInstance;
 
@@ -43,6 +44,7 @@ pub struct FrameContents<'a> {
 #[derive(Debug)]
 pub struct FrameRenderer {
     instanced: InstancedRenderer,
+    terrain: TerrainRenderer,
     debug: DebugRenderer,
     ui: UiRenderer,
     cull: CullPass,
@@ -62,10 +64,25 @@ impl FrameRenderer {
     ) -> Result<Self, RenderError> {
         Ok(Self {
             instanced: InstancedRenderer::new(device, mesh)?,
+            terrain: TerrainRenderer::new(device),
             debug: DebugRenderer::new(device),
             ui: UiRenderer::new(device),
             cull: CullPass::new(device, instance_capacity),
         })
+    }
+
+    /// The terrain renderer, for uploading and removing chunk meshes.
+    ///
+    /// Public where the other renderers are not, because terrain is retained:
+    /// the caller decides when a chunk's mesh appears and disappears, where
+    /// instances and debug lines are re-fed every frame.
+    pub const fn terrain_mut(&mut self) -> &mut TerrainRenderer {
+        &mut self.terrain
+    }
+
+    /// The terrain renderer, read-only.
+    pub const fn terrain(&self) -> &TerrainRenderer {
+        &self.terrain
     }
 
     /// The culling pass.
@@ -91,7 +108,7 @@ impl FrameRenderer {
         contents: FrameContents<'_>,
         overlay: Option<cx_ui::UiOutput>,
         clear: Rgba,
-    ) -> Result<(Readback, DrawStats, DebugStats, UiStats), RenderError> {
+    ) -> Result<(Readback, DrawStats, TerrainStats, DebugStats, UiStats), RenderError> {
         let [width, height] = size;
 
         self.instanced.render_to_format(
@@ -105,6 +122,7 @@ impl FrameRenderer {
             contents,
             clear,
             crate::instanced::OffscreenExtras {
+                terrain: Some(&mut self.terrain),
                 debug: Some(&mut self.debug),
                 overlay: overlay.map(|overlay| (&mut self.ui, overlay)),
             },
@@ -140,7 +158,10 @@ impl FrameRenderer {
     /// is what M1 asked for when it recorded the per-frame allocations as
     /// outstanding.
     pub fn creations(&self) -> u32 {
-        self.instanced.creations() + self.debug.creations() + self.cull.creations()
+        self.instanced.creations()
+            + self.terrain.creations()
+            + self.debug.creations()
+            + self.cull.creations()
     }
 
     /// Replaces the overlay renderer with one built for `format`.

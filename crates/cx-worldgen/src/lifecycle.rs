@@ -62,7 +62,10 @@ use crate::pool::GenerationPool;
 const EROSION_CELLS_PER_CHUNK: u32 = CELLS_PER_CHUNK_EDGE / cx_core::math::CELLS_PER_EROSION_CELL;
 
 /// Cells along one edge of a Coarse chunk's height grid.
-const COARSE_EDGE: u32 = 128;
+///
+/// Public because a renderer meshing a Coarse grid needs to know its shape;
+/// the grid itself comes from [`ChunkLifecycle::coarse`].
+pub const COARSE_EDGE: u32 = 128;
 
 /// How present a chunk is.
 ///
@@ -272,6 +275,16 @@ impl ChunkLifecycle {
     /// An Active chunk's data, for rendering and the sim.
     pub fn active(&self, chunk: ChunkCoord) -> Option<&ActiveChunk> {
         self.chunks.get(&chunk)?.active.as_ref()
+    }
+
+    /// A Coarse chunk's height grid, when one is resident.
+    ///
+    /// [`COARSE_EDGE`] cells to a side, row-major with +X fastest, 4 m per
+    /// cell, heights in metres — the shape [`ChunkSummary`] summarises and a
+    /// far-terrain mesh is built from. An Active chunk may or may not also
+    /// hold one; render from [`ChunkLifecycle::active`] first.
+    pub fn coarse(&self, chunk: ChunkCoord) -> Option<&[f32]> {
+        self.chunks.get(&chunk)?.coarse.as_deref()
     }
 
     /// A chunk's summary — present from the moment its block first arrived.

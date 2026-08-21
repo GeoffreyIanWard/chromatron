@@ -129,6 +129,19 @@ affordable to have both.
   cached terrain; the in-app measurement still needs render integration.
 - **CI**: the 20-minute worldgen gate now skips PRs that touch nothing terrain-shaping.
 
+- **The interactive demo** — the M2 milemarker made visible. `chromatron-game` now flies
+  over streaming terrain: the lifecycle aims at the camera each frame, and a small driver
+  diffs its decisions against what is on the GPU, meshing at most two chunks a frame.
+  Active chunks mesh at 2 m (66k vertices), Coarse at 8 m (4k), through a new retained
+  terrain path in `cx-render` — one draw per chunk, chunk-local vertices, per-frame rebase
+  against the floating origin, placeholder height/slope colour bands until biomes exist.
+  The mesh builder is pure and unit-tested; the pass is exercised offscreen in CI,
+  pixels asserted. Known and accepted: hairline height seams at chunk boundaries (one
+  source cell of slope; skirts later), no frustum culling of terrain draws (~170 draws,
+  cheap), and LOD pop at the Active/Coarse boundary. This also closes "the 200 m/s
+  traversal in-app measurement needs render integration" — the measurement is now a run
+  of the demo with the log open.
+
 ## Notes
 
 **The seam question gets answered here, visually.** Fine erosion detail cannot be perfectly continuous across block boundaries with a finite halo. Rivers should stay coherent because region-level drainage constrains them from above — verify that first, since it is the failure that would actually be noticeable. If hillside detail shows a visible seam, the mitigations in order of preference are a wider halo, fewer iterations with stronger per-iteration effect, or a post-pass seam blend.
