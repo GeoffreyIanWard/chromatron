@@ -25,7 +25,7 @@ An effectively infinite world, deterministically generated from a seed, eroded o
 
 | Check | Target |
 |---|---|
-| 4×4 block area generated in two different orders | identical field hashes |
+| 4×4 block area generated in two different orders | identical field hashes — **met**: 48 block generations in 885 s, all 16 identical across orders and all 16 distinct from each other. Gated in CI. |
 | Single block generation (full pipeline; erosion at 5,120² per `ADR-0015`, bake at 16,384²) | < 20 s, 8 background threads |
 | Chunk extraction from cached block | < 5 ms |
 | Terrain mesh bake, one chunk | < 200 ms offline |
@@ -96,6 +96,16 @@ affordable to have both.
 - **Step 7, derived fields (partial)** — `cx_worldgen::derive`. Slope and aspect, a byte
   each, saturating rather than wrapping, with an explicit flat-aspect sentinel. Water body
   extents still need the pre-fill surface retained through the pipeline.
+
+- **The pipeline as one call** — `cx_worldgen::generate_block`, stages 1–6. A generated
+  block keeps the ground surface as well as the filled one, so water bodies are computable.
+- **M2's headline exit criterion is met**: a 4×4 area generated in two orders produces
+  identical hashes — 48 block generations in 885 s, all 16 blocks matching and all 16
+  distinct. Gated in CI; `#[ignore]`d locally because of the runtime. The fast 2×2
+  equivalent in `pipeline.rs` runs on every commit.
+- **The generation pool's shape is settled by arithmetic**: peak ~0.71 GB per in-flight
+  block against a 0.8 GB budget, so **one block at a time** with threads inside it, not
+  eight blocks at once. See S07.
 
 ## Notes
 

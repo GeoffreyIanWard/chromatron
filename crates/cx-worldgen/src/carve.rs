@@ -72,16 +72,21 @@ pub struct CarveSettings {
 
 impl Default for CarveSettings {
     fn default() -> Self {
-        Self {
-            // 50,000 m² — five hectares. Small enough that a landscape has a
-            // visible network, large enough that it is a network and not a rash.
-            channel_threshold: 50_000.0,
-            depth_coefficient: 0.008,
-            width_coefficient: 0.009,
-            max_depth: 12.0,
-            max_width: 60.0,
-        }
+        Self::DEFAULT
     }
+}
+
+impl CarveSettings {
+    /// The default, as a constant so callers can stay `const`.
+    pub const DEFAULT: Self = Self {
+        // 50,000 m² — five hectares. Small enough that a landscape has a
+        // visible network, large enough that it is a network and not a rash.
+        channel_threshold: 50_000.0,
+        depth_coefficient: 0.008,
+        width_coefficient: 0.009,
+        max_depth: 12.0,
+        max_width: 60.0,
+    };
 }
 
 impl CarveSettings {
@@ -124,17 +129,38 @@ pub struct CarveReport {
     pub interior_sinks: usize,
 }
 
+/// What carving produced.
+///
+/// Three surfaces rather than one, because they answer different questions and
+/// only [`Self::drained`] is the terrain. Returning a single grid was the earlier
+/// shape and it silently discarded [`Self::ground`], which is the only thing that
+/// makes water depth computable — see that field.
+#[derive(Debug)]
+pub struct Carved {
+    /// The carved surface **with depressions filled**. This is the terrain, and
+    /// what the bake resamples.
+    pub drained: BlockGrid,
+    /// The carved surface **before** the final fill.
+    ///
+    /// The difference between this and [`Self::drained`] is standing water: where
+    /// the fill had to raise ground, that is a lake, and how far it raised it is
+    /// how deep. S07 step 7 derives water body extents and surface levels from
+    /// exactly this difference, so discarding it would mean either recomputing a
+    /// whole fill later or having no lakes.
+    pub ground: BlockGrid,
+    /// Drainage of the carved surface.
+    pub network: FlowNetwork,
+    /// What carving did.
+    pub report: CarveReport,
+}
+
 /// Cuts the flow network into a surface.
 ///
-/// Returns the carved surface and a network rebuilt from it. The rebuild is not
-/// optional bookkeeping: carving moves channels by metres, so every later stage
-/// that asks where the water is would otherwise be reading the drainage of a
-/// surface that no longer exists.
-pub fn carve(
-    surface: BlockGrid,
-    network: &FlowNetwork,
-    settings: CarveSettings,
-) -> (BlockGrid, FlowNetwork, CarveReport) {
+/// The network is rebuilt afterwards, and that is not optional bookkeeping:
+/// carving moves channels by metres, so every later stage that asks where the
+/// water is would otherwise be reading the drainage of a surface that no longer
+/// exists.
+pub fn carve(surface: BlockGrid, network: &FlowNetwork, settings: CarveSettings) -> Carved {
     let cell_size = cx_core::math::EROSION_CELL_SIZE;
     let cell_area = cell_size * cell_size;
 
@@ -207,6 +233,10 @@ pub fn carve(
         deepest = deepest.max(*depth);
     }
 
+    // Kept before the fill consumes it. This is the ground; what comes back
+    // from the fill is the ground plus whatever standing water sits on it.
+    let ground = surface.clone();
+
     let rebuilt = FlowNetwork::build(surface);
     let report = CarveReport {
         channel_cells,
@@ -215,7 +245,12 @@ pub fn carve(
         interior_sinks: rebuilt.interior_sinks(),
     };
 
-    (rebuilt.filled().clone(), rebuilt, report)
+    Carved {
+        drained: rebuilt.filled().clone(),
+        ground,
+        network: rebuilt,
+        report,
+    }
 }
 
 fn offset(cell: ErosionCell, dx: i32, dz: i32) -> Option<ErosionCell> {
@@ -259,8 +294,8 @@ mod tests {
     fn carved(settings: CarveSettings) -> (BlockGrid, BlockGrid, CarveReport) {
         let before = FlowNetwork::build(valley());
         let baseline = before.filled().clone();
-        let (after, _, report) = carve(baseline.clone(), &before, settings);
-        (baseline, after, report)
+        let carved = carve(baseline.clone(), &before, settings);
+        (baseline, carved.drained, carved.report)
     }
 
     /// **`no-erosion` leaves the surface alone** (S07).

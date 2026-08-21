@@ -133,13 +133,18 @@ pub struct ErosionSettings {
 
 impl Default for ErosionSettings {
     fn default() -> Self {
-        Self {
-            erodibility: 4.0e-5,
-            area_exponent: 0.5,
-            timestep: 2.0e4,
-            rounds: 12,
-        }
+        Self::DEFAULT
     }
+}
+
+impl ErosionSettings {
+    /// The default, as a constant so callers can stay `const`.
+    pub const DEFAULT: Self = Self {
+        erodibility: 4.0e-5,
+        area_exponent: 0.5,
+        timestep: 2.0e4,
+        rounds: 12,
+    };
 }
 
 impl ErosionSettings {
