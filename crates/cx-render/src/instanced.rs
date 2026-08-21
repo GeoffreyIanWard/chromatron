@@ -677,16 +677,21 @@ impl InstancedRenderer {
             Some(terrain) => {
                 // Cloned rather than borrowed: the handle is refcounted, and a
                 // borrow would pin the renderer this is about to encode with.
-                let terrain_pipeline = if format == crate::offscreen::TARGET_FORMAT {
-                    terrain.pipeline().clone()
-                } else {
-                    terrain.pipeline_for(device, format)
-                };
+                let (terrain_pipeline, water_pipeline) =
+                    if format == crate::offscreen::TARGET_FORMAT {
+                        (terrain.pipeline().clone(), terrain.water_pipeline().clone())
+                    } else {
+                        (
+                            terrain.pipeline_for(device, format),
+                            terrain.water_pipeline_for(device, format),
+                        )
+                    };
                 terrain.encode(
                     render_device,
                     &mut encoder,
                     &terrain_pipeline,
                     crate::terrain::TerrainPass {
+                        water_pipeline: &water_pipeline,
                         target: &colour_view,
                         depth: &depth_view,
                         width,

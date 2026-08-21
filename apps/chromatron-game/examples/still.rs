@@ -13,8 +13,10 @@
 //! PPM because it needs no image dependency; `sips -s format png` converts it.
 
 use cx_core::math::{BlockCoord, CELL_SIZE, CELLS_PER_CHUNK_EDGE, ChunkCoord, Vec3};
-use cx_render::{Camera, FrameContents, FrameRenderer, MeshData, RenderDevice, TerrainMeshData};
-use cx_worldgen::{BlockCache, WorldSettings, bake_chunk};
+use cx_render::{
+    Camera, FrameContents, FrameRenderer, MeshData, RenderDevice, TerrainMeshData, WaterMeshData,
+};
+use cx_worldgen::{BlockCache, WaterSettings, WorldSettings, bake_chunk, bake_water};
 
 /// Same seed as the windowed demo, so the cache is shared.
 const SEED: u64 = 20_260_821;
@@ -57,7 +59,18 @@ fn main() -> anyhow::Result<()> {
             ) else {
                 continue;
             };
-            renderer.terrain_mut().upload(&device, chunk, &mesh);
+            let water = bake_water(&block, chunk, WaterSettings::DEFAULT).and_then(|water| {
+                WaterMeshData::from_water(
+                    water.surface(),
+                    water.depth(),
+                    water.edge() as usize,
+                    cx_core::math::CHUNK_SIZE / water.edge() as f32,
+                    0.15,
+                )
+            });
+            renderer
+                .terrain_mut()
+                .upload(&device, chunk, &mesh, water.as_ref());
         }
     }
     renderer.terrain_mut().set_origin(ChunkCoord::new(0, 0));
@@ -88,9 +101,11 @@ fn main() -> anyhow::Result<()> {
 
     // Where the windowed demo starts: high over the middle chunk, looking
     // down across the neighbourhood.
+    // Low and oblique rather than high and wide: at altitude a 2 m river is
+    // sub-pixel, and the water shapes are the thing this image exists to show.
     let camera = Camera::looking_at(
-        Vec3::new(768.0, max + 350.0, 1500.0),
-        Vec3::new(768.0, (min + max) * 0.5, 700.0),
+        Vec3::new(768.0, max + 120.0, 1150.0),
+        Vec3::new(700.0, min, 700.0),
     );
 
     let (readback, _, terrain, _, _) = renderer.render_offscreen(

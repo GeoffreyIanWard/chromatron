@@ -142,6 +142,19 @@ affordable to have both.
   traversal in-app measurement needs render integration" — the measurement is now a run
   of the demo with the log open.
 
+- **Visible water** — `cx_worldgen::water` + a translucent pass in `cx-render`. S07 step 7
+  read out at last: lakes are the fact of the two surfaces (`terrain - ground`), rivers a
+  threshold on drainage area — the *same* threshold channel carving uses, so water lies
+  exactly in the channels that were cut, flooded to the waterline so a river has its
+  trench's width rather than a 2 m thread down its middle. Lake spines spread their fill
+  level so pond chains read as connected waterways; spine scanning reaches past chunk
+  borders so no chunk edge cuts a river. Per-chunk water rides the lifecycle at both
+  Active (2 m) and Coarse (4 m, wettest-cell downsampling so narrow rivers survive
+  distance), and the demo draws it: alpha-blended, depth-tinted, shoreline-feathered.
+  Presented channel *depth* is explicitly presentation, not hydrology — discharge volume
+  is unsimulated. Known and accepted: water floats 15 cm above lake beds because the
+  baked terrain *is* the fill level; baking beds from the pre-fill ground is future work.
+
 ## Notes
 
 **The seam question gets answered here, visually.** Fine erosion detail cannot be perfectly continuous across block boundaries with a finite halo. Rivers should stay coherent because region-level drainage constrains them from above — verify that first, since it is the failure that would actually be noticeable. If hillside detail shows a visible seam, the mitigations in order of preference are a wider halo, fewer iterations with stronger per-iteration effect, or a post-pass seam blend.

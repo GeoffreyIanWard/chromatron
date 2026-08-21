@@ -82,3 +82,44 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     return vec4<f32>(base * shade, 1.0);
 }
+
+// ---- Water ----
+//
+// Translucent surfaces over the opaque terrain: lake plates at the fill
+// level, ribbons lying in carved channels. Depth is per-vertex, from
+// worldgen's water grid; it drives both the colour (shallow teal to deep
+// blue) and the alpha, which fades to nothing at the shoreline so the edge
+// is a soft meeting rather than a hard polygon.
+
+struct WaterVertexInput {
+    // Chunk-local x/z, absolute water-surface elevation in y.
+    @location(0) position: vec3<f32>,
+    // Water depth at this vertex, metres. Zero right at the shore.
+    @location(1) depth: f32,
+};
+
+struct WaterVertexOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) depth: f32,
+};
+
+@vertex
+fn vs_water(vertex: WaterVertexInput, instance: InstanceInput) -> WaterVertexOutput {
+    var out: WaterVertexOutput;
+    let world_position = vertex.position + instance.offset.xyz;
+    out.clip_position = camera.view_projection * vec4<f32>(world_position, 1.0);
+    out.depth = vertex.depth;
+    return out;
+}
+
+const SHALLOW_WATER: vec3<f32> = vec3<f32>(0.10, 0.30, 0.35);
+const DEEP_WATER: vec3<f32> = vec3<f32>(0.02, 0.08, 0.20);
+
+@fragment
+fn fs_water(in: WaterVertexOutput) -> @location(0) vec4<f32> {
+    let colour = mix(SHALLOW_WATER, DEEP_WATER, clamp(in.depth / 3.0, 0.0, 1.0));
+    // Fade out over the last 20 cm so shorelines feather instead of cutting.
+    let shore = smoothstep(0.0, 0.2, in.depth);
+    let alpha = shore * clamp(0.35 + 0.30 * in.depth, 0.35, 0.85);
+    return vec4<f32>(colour, alpha);
+}

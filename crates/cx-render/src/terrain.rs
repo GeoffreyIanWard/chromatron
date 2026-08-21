@@ -195,6 +195,159 @@ impl TerrainMeshData {
     }
 }
 
+/// One vertex of a water-surface mesh.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct WaterVertex {
+    /// Chunk-local x/z with absolute water-surface elevation in y, metres.
+    pub position: [f32; 3],
+    /// Water depth at this vertex, metres. Zero right at the shore, which the
+    /// shader fades to transparent.
+    pub depth: f32,
+}
+
+impl WaterVertex {
+    const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
+        array_stride: size_of::<WaterVertex>() as wgpu::BufferAddress,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: &[
+            wgpu::VertexAttribute {
+                offset: 0,
+                shader_location: 0,
+                format: wgpu::VertexFormat::Float32x3,
+            },
+            wgpu::VertexAttribute {
+                offset: size_of::<[f32; 3]>() as wgpu::BufferAddress,
+                shader_location: 1,
+                format: wgpu::VertexFormat::Float32,
+            },
+        ],
+    };
+}
+
+/// Vertices and indices for one chunk's water surfaces.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WaterMeshData {
+    /// Vertices, on the same grid convention as [`TerrainMeshData`].
+    pub vertices: Vec<WaterVertex>,
+    /// Triangle indices, counter-clockwise seen from above.
+    pub indices: Vec<u32>,
+}
+
+impl WaterMeshData {
+    /// How many triangles this mesh draws.
+    pub fn triangle_count(&self) -> usize {
+        self.indices.len() / 3
+    }
+
+    /// Meshes the wet cells of a water grid.
+    ///
+    /// `surface` and `depth` are `edge * edge` cell-centred values; a cell is
+    /// wet where `depth > 0`. A quad is emitted when **any** of its corner
+    /// cells is wet — all-corners-wet would erase rivers, which are one or
+    /// two cells wide at this grid. A dry vertex bordering water takes the
+    /// highest wet neighbour's surface and keeps depth zero, which is what
+    /// lets the shader feather the shoreline.
+    ///
+    /// `lift` raises the whole surface, in metres — the baked terrain *is*
+    /// the fill level over lakes, so coincident geometry would z-fight; a
+    /// hand's width of lift costs nothing visually and removes the shimmer.
+    ///
+    /// Returns `None` on mismatched inputs, or when nothing is wet.
+    pub fn from_water(
+        surface: &[f32],
+        depth: &[f32],
+        edge: usize,
+        cell_size: f32,
+        lift: f32,
+    ) -> Option<Self> {
+        if edge == 0 || surface.len() != edge * edge || depth.len() != edge * edge {
+            return None;
+        }
+
+        let verts = edge + 1;
+        let extent = edge as f32 * cell_size;
+        let position_of = |i: usize| -> f32 {
+            if i == 0 {
+                0.0
+            } else if i == edge {
+                extent
+            } else {
+                i as f32 * cell_size + 0.5 * cell_size
+            }
+        };
+        let cell_of = |i: usize| -> usize { i.min(edge - 1) };
+        let at = |grid: &[f32], i: usize, j: usize| -> f32 {
+            *grid.get(cell_of(j) * edge + cell_of(i)).unwrap_or(&0.0)
+        };
+
+        // Vertex heights: a wet cell's own surface, or the highest wet
+        // neighbour's for a shore vertex. Depth stays the cell's own.
+        let mut vertices = Vec::with_capacity(verts * verts);
+        for j in 0..verts {
+            for i in 0..verts {
+                let own_depth = at(depth, i, j);
+                let height = if own_depth > 0.0 {
+                    at(surface, i, j)
+                } else {
+                    let mut best = f32::NEG_INFINITY;
+                    for dj in -1i32..=1 {
+                        for di in -1i32..=1 {
+                            let ni = i as i32 + di;
+                            let nj = j as i32 + dj;
+                            if ni < 0 || nj < 0 {
+                                continue;
+                            }
+                            let (ni, nj) = (ni as usize, nj as usize);
+                            if at(depth, ni, nj) > 0.0 {
+                                best = best.max(at(surface, ni, nj));
+                            }
+                        }
+                    }
+                    best
+                };
+                vertices.push(WaterVertex {
+                    position: [position_of(i), height + lift, position_of(j)],
+                    depth: own_depth,
+                });
+            }
+        }
+
+        let mut indices = Vec::new();
+        for j in 0..edge {
+            for i in 0..edge {
+                let wet = at(depth, i, j) > 0.0
+                    || at(depth, i + 1, j) > 0.0
+                    || at(depth, i, j + 1) > 0.0
+                    || at(depth, i + 1, j + 1) > 0.0;
+                if !wet {
+                    continue;
+                }
+                let a = (j * verts + i) as u32;
+                let b = a + 1;
+                let d = a + verts as u32;
+                let c = d + 1;
+                indices.extend_from_slice(&[a, d, c, a, c, b]);
+            }
+        }
+
+        if indices.is_empty() {
+            return None;
+        }
+
+        // A shore vertex with no wet neighbour is never referenced by an
+        // emitted quad, but its NEG_INFINITY height would still upload; pin
+        // unused sentinels to zero so the buffer holds no infinities.
+        for vertex in &mut vertices {
+            if !vertex.position[1].is_finite() {
+                vertex.position[1] = 0.0;
+            }
+        }
+
+        Some(Self { vertices, indices })
+    }
+}
+
 fn normalise(v: [f32; 3]) -> [f32; 3] {
     let length = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
     if length > 0.0 {
@@ -209,10 +362,12 @@ fn normalise(v: [f32; 3]) -> [f32; 3] {
 pub struct TerrainStats {
     /// Chunk meshes resident on the GPU.
     pub chunks: u32,
-    /// Draw calls issued — one per chunk, today.
+    /// Draw calls issued — one per chunk, plus one per chunk with water.
     pub draw_calls: u32,
     /// Triangles across those draws.
     pub triangles: u32,
+    /// Chunks that drew a water surface.
+    pub water_chunks: u32,
 }
 
 /// One chunk's mesh, resident on the GPU.
@@ -220,10 +375,21 @@ struct GpuChunk {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     index_count: u32,
+    water: Option<GpuWater>,
+}
+
+/// One chunk's water surface, resident on the GPU.
+struct GpuWater {
+    vertices: wgpu::Buffer,
+    indices: wgpu::Buffer,
+    index_count: u32,
 }
 
 /// Everything a terrain draw needs beyond the renderer itself.
 pub(crate) struct TerrainPass<'a> {
+    /// The water pipeline for the target's format, drawn after every opaque
+    /// chunk so blending sees finished depth.
+    pub water_pipeline: &'a wgpu::RenderPipeline,
     /// Colour attachment. Loaded, not cleared — terrain draws over the scene
     /// pass's output.
     pub target: &'a wgpu::TextureView,
@@ -248,6 +414,7 @@ pub struct TerrainRenderer {
     /// before the draw paths run.
     origin: ChunkCoord,
     pipeline: wgpu::RenderPipeline,
+    water_pipeline: wgpu::RenderPipeline,
     shader: wgpu::ShaderModule,
     pipeline_layout: wgpu::PipelineLayout,
     camera_buffer: wgpu::Buffer,
@@ -301,6 +468,12 @@ impl TerrainRenderer {
             &pipeline_layout,
             crate::offscreen::TARGET_FORMAT,
         );
+        let water_pipeline = build_water_pipeline(
+            device,
+            &shader,
+            &pipeline_layout,
+            crate::offscreen::TARGET_FORMAT,
+        );
 
         Self {
             chunks: BTreeMap::new(),
@@ -311,6 +484,7 @@ impl TerrainRenderer {
             staging: Vec::new(),
             origin: ChunkCoord::new(0, 0),
             pipeline,
+            water_pipeline,
             shader,
             pipeline_layout,
             camera_buffer,
@@ -332,11 +506,36 @@ impl TerrainRenderer {
         &self.pipeline
     }
 
-    /// Uploads (or replaces) one chunk's mesh.
+    /// The water pipeline for a target of `format`.
+    pub(crate) fn water_pipeline_for(
+        &self,
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+    ) -> wgpu::RenderPipeline {
+        build_water_pipeline(device, &self.shader, &self.pipeline_layout, format)
+    }
+
+    /// The water pipeline for the offscreen format.
+    pub(crate) const fn water_pipeline(&self) -> &wgpu::RenderPipeline {
+        &self.water_pipeline
+    }
+
+    /// Uploads (or replaces) one chunk's mesh, and its water surface if it
+    /// has one.
+    ///
+    /// The two travel together deliberately: they come from the same source
+    /// data at the same moment, and uploading them separately would open a
+    /// frame where a chunk shows new ground under old water.
     ///
     /// An empty mesh removes the chunk instead, because a resident
     /// zero-triangle mesh would still cost a draw call every frame.
-    pub fn upload(&mut self, device: &RenderDevice, chunk: ChunkCoord, mesh: &TerrainMeshData) {
+    pub fn upload(
+        &mut self,
+        device: &RenderDevice,
+        chunk: ChunkCoord,
+        mesh: &TerrainMeshData,
+        water: Option<&WaterMeshData>,
+    ) {
         if mesh.indices.is_empty() {
             self.remove(chunk);
             return;
@@ -354,12 +553,29 @@ impl TerrainRenderer {
             usage: wgpu::BufferUsages::INDEX,
         });
 
+        let water = water
+            .filter(|water| !water.indices.is_empty())
+            .map(|water| GpuWater {
+                vertices: wgpu_device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("cx-render water chunk vertices"),
+                    contents: bytemuck::cast_slice(&water.vertices),
+                    usage: wgpu::BufferUsages::VERTEX,
+                }),
+                indices: wgpu_device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("cx-render water chunk indices"),
+                    contents: bytemuck::cast_slice(&water.indices),
+                    usage: wgpu::BufferUsages::INDEX,
+                }),
+                index_count: water.indices.len() as u32,
+            });
+
         self.chunks.insert(
             (chunk.x, chunk.z),
             GpuChunk {
                 vertices,
                 indices,
                 index_count: mesh.indices.len() as u32,
+                water,
             },
         );
     }
@@ -442,6 +658,7 @@ impl TerrainRenderer {
             chunks: self.chunks.len() as u32,
             draw_calls: 0,
             triangles: 0,
+            water_chunks: 0,
         };
 
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -484,6 +701,29 @@ impl TerrainRenderer {
 
             stats.draw_calls += 1;
             stats.triangles += chunk.index_count / 3;
+        }
+
+        // Water after every opaque chunk, in the same pass: blending needs
+        // the depth of all the ground it lies over, whichever chunk that
+        // ground belongs to.
+        let mut water_bound = false;
+        for (index, chunk) in self.chunks.values().enumerate() {
+            let Some(water) = &chunk.water else {
+                continue;
+            };
+            if !water_bound {
+                render_pass.set_pipeline(pass.water_pipeline);
+                water_bound = true;
+            }
+            let byte_offset = (index * size_of::<ChunkOffset>()) as wgpu::BufferAddress;
+            render_pass.set_vertex_buffer(0, water.vertices.slice(..));
+            render_pass.set_vertex_buffer(1, offsets.slice(byte_offset..));
+            render_pass.set_index_buffer(water.indices.slice(..), wgpu::IndexFormat::Uint32);
+            render_pass.draw_indexed(0..water.index_count, 0, 0..1);
+
+            stats.draw_calls += 1;
+            stats.triangles += water.index_count / 3;
+            stats.water_chunks += 1;
         }
 
         stats
@@ -529,6 +769,59 @@ fn build_pipeline(
         depth_stencil: Some(wgpu::DepthStencilState {
             format: DEPTH_FORMAT,
             depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Less),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+/// Builds the water pipeline for one colour format.
+///
+/// Differs from the terrain pipeline in exactly the ways translucency needs:
+/// alpha blending on, depth *test* on but depth *write* off (water must not
+/// occlude what is under it from later draws), and culling off — a water
+/// plate seen from below while diving should still be there.
+fn build_water_pipeline(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    pipeline_layout: &wgpu::PipelineLayout,
+    format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("cx-render water pipeline"),
+        layout: Some(pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_water"),
+            buffers: &[Some(WaterVertex::LAYOUT), Some(ChunkOffset::LAYOUT)],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_water"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            unclipped_depth: false,
+            conservative: false,
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: Some(false),
             depth_compare: Some(wgpu::CompareFunction::Less),
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
@@ -648,6 +941,67 @@ mod tests {
         assert!(TerrainMeshData::from_heights(&heights, 16, 1.0, 3).is_none());
         assert!(TerrainMeshData::from_heights(&heights, 15, 1.0, 1).is_none());
         assert!(TerrainMeshData::from_heights(&[], 0, 1.0, 1).is_none());
+    }
+
+    #[test]
+    fn water_meshes_only_around_wet_cells() {
+        let edge = 8;
+        let mut depth = vec![0.0f32; edge * edge];
+        let mut surface = vec![0.0f32; edge * edge];
+        // One wet cell in the middle.
+        depth[3 * edge + 4] = 1.5;
+        surface[3 * edge + 4] = 60.0;
+
+        let mesh =
+            WaterMeshData::from_water(&surface, &depth, edge, 4.0, 0.1).expect("one wet cell");
+
+        // Any-corner-wet: the wet cell's own quad plus the three neighbours
+        // that share each of its corners — a 2x2 block of quads per corner
+        // direction collapses to a 3x3 neighbourhood minus... simplest to
+        // assert the exact count: the four quads touching the wet cell's four
+        // corners are (3,2),(4,2),(3,3),(4,3) in quad space — wait, quad
+        // (i,j) has corners (i,j),(i+1,j),(i,j+1),(i+1,j+1), so the quads
+        // containing cell (4,3) as a corner are (3,2),(4,2),(3,3),(4,3).
+        assert_eq!(mesh.triangle_count(), 4 * 2);
+
+        // Wet vertices carry the lifted surface; their depth survives.
+        let wet = mesh
+            .vertices
+            .iter()
+            .find(|v| v.depth > 0.0)
+            .expect("the wet cell's vertex exists");
+        assert!((wet.position[1] - 60.1).abs() < 1e-4);
+
+        // Shore vertices borrow the wet neighbour's surface and keep zero
+        // depth, which is what the shader fades on.
+        let shore = mesh
+            .vertices
+            .iter()
+            .filter(|v| v.depth == 0.0 && v.position[1] > 60.0)
+            .count();
+        assert!(shore > 0, "shore vertices should sit at the water level");
+    }
+
+    #[test]
+    fn dry_grids_and_mismatched_inputs_make_no_water_mesh() {
+        let dry = vec![0.0f32; 16];
+        let surface = vec![5.0f32; 16];
+        assert!(WaterMeshData::from_water(&surface, &dry, 4, 1.0, 0.0).is_none());
+        assert!(WaterMeshData::from_water(&surface, &dry[..8], 4, 1.0, 0.0).is_none());
+        assert!(WaterMeshData::from_water(&[], &[], 0, 1.0, 0.0).is_none());
+    }
+
+    #[test]
+    fn no_water_vertex_uploads_an_infinity() {
+        // A shore vertex with no wet neighbour never joins a quad, but its
+        // buffer slot still uploads; the builder pins those to zero.
+        let edge = 8;
+        let mut depth = vec![0.0f32; edge * edge];
+        let surface = vec![50.0f32; edge * edge];
+        depth[0] = 1.0;
+
+        let mesh = WaterMeshData::from_water(&surface, &depth, edge, 4.0, 0.0).expect("wet");
+        assert!(mesh.vertices.iter().all(|v| v.position[1].is_finite()));
     }
 
     #[test]

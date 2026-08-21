@@ -57,6 +57,7 @@ use crate::derive::{DerivedFields, derive_fields};
 use crate::frontier::{FrontierSettings, wanted_blocks};
 use crate::pipeline::{GeneratedBlock, WorldSettings};
 use crate::pool::GenerationPool;
+use crate::water::{ChunkWater, WaterSettings, bake_water};
 
 /// Erosion-grid cells along one chunk edge (256 at the current grid ratio).
 const EROSION_CELLS_PER_CHUNK: u32 = CELLS_PER_CHUNK_EDGE / cx_core::math::CELLS_PER_EROSION_CELL;
@@ -108,6 +109,9 @@ pub struct ChunkSummary {
 struct ChunkRecord {
     summary: ChunkSummary,
     coarse: Option<Vec<f32>>,
+    /// Water at Coarse resolution, when the chunk is Coarse or above and has
+    /// any. Rides with `coarse` rather than having its own residency level.
+    coarse_water: Option<ChunkWater>,
     active: Option<ActiveChunk>,
 }
 
@@ -118,6 +122,9 @@ pub struct ActiveChunk {
     pub elevation: ChunkElevation,
     /// Slope and aspect, quantised.
     pub fields: DerivedFields,
+    /// Lakes and channels on the 2 m grid — `None` when the chunk is dry,
+    /// which most are.
+    pub water: Option<ChunkWater>,
 }
 
 impl ChunkRecord {
@@ -143,6 +150,12 @@ impl ChunkRecord {
         if let Some(active) = &self.active {
             bytes += size_of_val(active.elevation.as_slice());
             bytes += active.fields.slopes().len() + active.fields.aspects().len();
+            if let Some(water) = &active.water {
+                bytes += water.resident_bytes();
+            }
+        }
+        if let Some(water) = &self.coarse_water {
+            bytes += water.resident_bytes();
         }
         bytes
     }
@@ -168,6 +181,8 @@ pub struct LifecycleSettings {
     pub frontier: FrontierSettings,
     /// How chunks bake.
     pub bake: BakeSettings,
+    /// What counts as water when a chunk's water is read out.
+    pub water: WaterSettings,
 }
 
 impl LifecycleSettings {
@@ -183,6 +198,7 @@ impl LifecycleSettings {
         resident_blocks: 2,
         frontier: FrontierSettings::DEFAULT,
         bake: BakeSettings::SMOOTH,
+        water: WaterSettings::DEFAULT,
     };
 }
 
@@ -287,6 +303,15 @@ impl ChunkLifecycle {
         self.chunks.get(&chunk)?.coarse.as_deref()
     }
 
+    /// A Coarse chunk's water, when it is resident and the chunk has any.
+    ///
+    /// Half the resolution of [`ChunkWater`]'s native grid — 128 cells to a
+    /// side at 4 m — downsampled wettest-cell-first so narrow rivers survive.
+    /// An Active chunk's full-resolution water is on [`ActiveChunk::water`].
+    pub fn coarse_water(&self, chunk: ChunkCoord) -> Option<&ChunkWater> {
+        self.chunks.get(&chunk)?.coarse_water.as_ref()
+    }
+
     /// A chunk's summary — present from the moment its block first arrived.
     pub fn summary(&self, chunk: ChunkCoord) -> Option<ChunkSummary> {
         self.chunks.get(&chunk).map(|record| record.summary)
@@ -367,6 +392,7 @@ impl ChunkLifecycle {
                 .or_insert(ChunkRecord {
                     summary,
                     coarse: None,
+                    coarse_water: None,
                     active: None,
                 })
                 .summary = summary;
@@ -408,8 +434,13 @@ impl ChunkLifecycle {
                 // collapsed-state bug starved every genuine demotion.
                 if let Some(active) = record.active.take() {
                     record.coarse = Some(downsample_active(&active.elevation));
+                    // The water steps down with the heights, halved the same
+                    // way — no re-read of the block, which may be long gone.
+                    record.coarse_water =
+                        active.water.as_ref().and_then(|water| water.downsample(2));
                     demoted += 1;
                 } else if record.coarse.take().is_some() {
+                    record.coarse_water = None;
                     demoted += 1;
                 }
             }
@@ -461,7 +492,12 @@ impl ChunkLifecycle {
                     );
                     baked.map(|elevation| {
                         let fields = derive_fields(&elevation);
-                        ActiveChunk { elevation, fields }
+                        let water = bake_water(block, chunk, self.settings.water);
+                        ActiveChunk {
+                            elevation,
+                            fields,
+                            water,
+                        }
                     })
                 }
                 _ => None,
@@ -476,6 +512,8 @@ impl ChunkLifecycle {
                     }
                     None if desired >= Residency::Coarse && record.coarse.is_none() => {
                         record.coarse = Some(coarse_from_block(block, chunk));
+                        record.coarse_water = bake_water(block, chunk, self.settings.water)
+                            .and_then(|water| water.downsample(2));
                         promoted += 1;
                     }
                     None => {}

@@ -153,6 +153,8 @@ pub struct WindowSurface {
     pipeline: wgpu::RenderPipeline,
     /// The terrain pipeline, for the same format and the same reason.
     terrain_pipeline: wgpu::RenderPipeline,
+    /// The water pipeline, likewise.
+    water_pipeline: wgpu::RenderPipeline,
     /// The debug-line pipeline, likewise.
     debug_pipeline: wgpu::RenderPipeline,
 }
@@ -238,6 +240,9 @@ impl WindowSurface {
         let terrain_pipeline = renderer
             .terrain()
             .pipeline_for(device.wgpu_device(), config.format);
+        let water_pipeline = renderer
+            .terrain()
+            .water_pipeline_for(device.wgpu_device(), config.format);
         let debug_pipeline = renderer
             .debug()
             .pipeline_for(device.wgpu_device(), config.format);
@@ -252,6 +257,7 @@ impl WindowSurface {
             depth,
             pipeline,
             terrain_pipeline,
+            water_pipeline,
             debug_pipeline,
         })
     }
@@ -411,6 +417,7 @@ impl WindowSurface {
             &mut encoder,
             &self.terrain_pipeline,
             TerrainPass {
+                water_pipeline: &self.water_pipeline,
                 target: &view,
                 depth: &self.depth,
                 width: self.config.width,

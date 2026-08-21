@@ -26,12 +26,13 @@
 
 use std::collections::BTreeMap;
 
-use cx_app::{FlyCamera, FrameLoop, TerrainMeshData, WindowConfig, run};
+use cx_app::{FlyCamera, FrameLoop, TerrainMeshData, WaterMeshData, WindowConfig, run};
 use cx_core::math::{CELL_SIZE, CELLS_PER_CHUNK_EDGE, CHUNK_SIZE, ChunkCoord, Vec3, WorldPos};
 use cx_ecs::{SimSchedule, SimWorld, WorldConfig};
 use cx_view::DebugColour;
 use cx_worldgen::{
-    BlockCache, ChunkLifecycle, LifecycleSettings, Residency, WorldSettings, lifecycle::COARSE_EDGE,
+    BlockCache, ChunkLifecycle, ChunkWater, LifecycleSettings, Residency, WorldSettings,
+    lifecycle::COARSE_EDGE,
 };
 
 /// The demo world. An arbitrary constant, and deliberately so: the same seed
@@ -46,6 +47,14 @@ const ACTIVE_STRIDE: usize = 4;
 /// Every other cell of a Coarse chunk's 4 m grid — an 8 m mesh, 4,225
 /// vertices a chunk. Horizon terrain.
 const COARSE_STRIDE: usize = 2;
+
+/// Metres the water surface floats above the baked terrain.
+///
+/// The baked terrain over a lake *is* the fill level, so coincident geometry
+/// would z-fight; a hand's width of lift removes the shimmer and reads as
+/// nothing from any distance the demo flies at. Goes away when lake beds bake
+/// from the pre-fill ground instead.
+const WATER_LIFT: f32 = 0.15;
 
 /// Chunk meshes built per frame, at most.
 ///
@@ -194,33 +203,55 @@ impl TerrainDriver {
                 continue;
             }
 
-            let mesh = match residency {
-                Residency::Active => self.lifecycle.active(chunk).and_then(|active| {
-                    TerrainMeshData::from_heights(
-                        active.elevation.as_slice(),
-                        CELLS_PER_CHUNK_EDGE as usize,
-                        CELL_SIZE,
-                        ACTIVE_STRIDE,
-                    )
-                }),
-                Residency::Coarse => self.lifecycle.coarse(chunk).and_then(|heights| {
-                    TerrainMeshData::from_heights(
-                        heights,
-                        COARSE_EDGE as usize,
-                        CHUNK_SIZE / COARSE_EDGE as f32,
-                        COARSE_STRIDE,
-                    )
-                }),
-                Residency::Dormant => None,
+            let (mesh, water) = match residency {
+                Residency::Active => match self.lifecycle.active(chunk) {
+                    Some(active) => (
+                        TerrainMeshData::from_heights(
+                            active.elevation.as_slice(),
+                            CELLS_PER_CHUNK_EDGE as usize,
+                            CELL_SIZE,
+                            ACTIVE_STRIDE,
+                        ),
+                        active.water.as_ref().and_then(water_mesh),
+                    ),
+                    None => (None, None),
+                },
+                Residency::Coarse => (
+                    self.lifecycle.coarse(chunk).and_then(|heights| {
+                        TerrainMeshData::from_heights(
+                            heights,
+                            COARSE_EDGE as usize,
+                            CHUNK_SIZE / COARSE_EDGE as f32,
+                            COARSE_STRIDE,
+                        )
+                    }),
+                    self.lifecycle.coarse_water(chunk).and_then(water_mesh),
+                ),
+                Residency::Dormant => (None, None),
             };
 
             if let Some(mesh) = mesh {
-                frame_loop.upload_terrain_chunk(chunk, &mesh);
+                frame_loop.upload_terrain_chunk(chunk, &mesh, water.as_ref());
                 self.meshed.insert((chunk.x, chunk.z), residency);
                 budget -= 1;
             }
         }
     }
+}
+
+/// A chunk's water mesh, at whatever resolution its grid holds.
+fn water_mesh(water: &ChunkWater) -> Option<WaterMeshData> {
+    let edge = water.edge() as usize;
+    if edge == 0 {
+        return None;
+    }
+    WaterMeshData::from_water(
+        water.surface(),
+        water.depth(),
+        edge,
+        CHUNK_SIZE / edge as f32,
+        WATER_LIFT,
+    )
 }
 
 /// World axes at the origin, so there is something to orient by before the
