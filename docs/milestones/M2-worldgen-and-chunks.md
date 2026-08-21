@@ -93,6 +93,10 @@ affordable to have both.
   questions are now tested, and both tests had to be strengthened after falsification
   showed they passed against the exact artifacts they existed to exclude.
 
+- **Step 7, derived fields (partial)** — `cx_worldgen::derive`. Slope and aspect, a byte
+  each, saturating rather than wrapping, with an explicit flat-aspect sentinel. Water body
+  extents still need the pre-fill surface retained through the pipeline.
+
 ## Notes
 
 **The seam question gets answered here, visually.** Fine erosion detail cannot be perfectly continuous across block boundaries with a finite halo. Rivers should stay coherent because region-level drainage constrains them from above — verify that first, since it is the failure that would actually be noticeable. If hillside detail shows a visible seam, the mitigations in order of preference are a wider halo, fewer iterations with stronger per-iteration effect, or a post-pass seam blend.

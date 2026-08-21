@@ -178,6 +178,32 @@ erosion stages. Recorded because it is the strongest argument yet for building t
 world map before tuning anything else, and because every assertion in the erosion
 modules passes against the biased surface — it took four renders to find.
 
+**Step 7: derived static fields (partial).** `cx_worldgen::derive` — slope and aspect
+from baked `ELEVATION`, quantised to a byte each per `bench/memory-budget.md`. Computed
+once and never recomputed: `ADR-0008` removed continuous erosion precisely so these could
+be static, and only a discrete edit (S19) dirties them.
+
+Quantisation is **saturating, not wrapping** — a near-vertical face pins at the maximum
+rather than rolling over to read as level, which would let navigation route a path up a
+cliff. Flat ground gets an explicit `ASPECT_FLAT` sentinel rather than aspect zero, because
+zero is north and a world where every plain faces north is the kind of wrong that looks
+like a feature. The resolution claims are compile-time assertions on the constants, so
+coarsening either step size fails the build rather than quietly degrading every derived
+field in the world.
+
+Aspect faces **downhill**, the way water runs, clockwise from north. Tested on both axes,
+because a transposed gradient passes a single-axis test — and the sign was falsified by
+inverting it, which moves east from 90 degrees to 269.6.
+
+**Known approximation**: slope at a chunk's rim is a one-sided difference, since a central
+difference needs a neighbour the chunk does not contain. That is 0.4% of a chunk's cells,
+under-reporting slope, and the fix is baking with the one-cell halo `ELEVATION` is already
+registered for. Recorded rather than papered over — ignored, it would read as a slightly
+cheaper route around the edge of every chunk.
+
+Floodplain masks, traversability, and water body extents remain. Water bodies need the
+*pre-fill* surface retained through the pipeline, which the stages currently discard.
+
 **Step 6: the bake.** `cx_worldgen::bake` — `ADR-0015`'s other half, finally delivering.
 The eroded 2 m surface is resampled to the 0.5 m `ELEVATION` grid and high-frequency
 detail is added back. Chunks are pure extraction plus interpolation, per `ADR-0006`: a
@@ -266,7 +292,8 @@ sync between a generation run and a later regeneration of the same block
 the first module with a dependency, and the first entry in S21's field-access
 layer.
 
-Steps 7–9 remain: static field derivation, biome assignment, and scatter.
+Steps 8–9 remain, plus the rest of step 7: biome assignment, scatter, floodplain masks,
+traversability, and water body extents.
 
 **Whole-pipeline cost so far**: about 130 s single-threaded for steps 1–5 over one block
 (world map, base elevation, fill and routing, 12 erosion rounds, 4 thermal rounds,
