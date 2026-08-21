@@ -56,17 +56,22 @@ pub struct TerrainShape {
 
 impl Default for TerrainShape {
     fn default() -> Self {
-        Self {
-            relief: 120.0,
-            base: 40.0,
-            // A kilometre: large enough that a chunk is a piece of a hill rather
-            // than a hill, which is what makes the seams between chunks
-            // uninteresting — the point of positional generation.
-            feature_size: 1_024.0,
-            octaves: 5,
-            persistence: 0.5,
-        }
+        Self::DEFAULT
     }
+}
+
+impl TerrainShape {
+    /// The default, as a constant so callers can stay `const`.
+    pub const DEFAULT: Self = Self {
+        relief: 120.0,
+        base: 40.0,
+        // A kilometre: large enough that a chunk is a piece of a hill rather
+        // than a hill, which is what makes the seams between chunks
+        // uninteresting — the point of positional generation.
+        feature_size: 1_024.0,
+        octaves: 5,
+        persistence: 0.5,
+    };
 }
 
 impl TerrainShape {

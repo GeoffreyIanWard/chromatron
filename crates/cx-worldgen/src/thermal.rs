@@ -71,12 +71,17 @@ pub struct ThermalSettings {
 
 impl Default for ThermalSettings {
     fn default() -> Self {
-        Self {
-            talus_degrees: 35.0,
-            strength: 0.5,
-            rounds: 8,
-        }
+        Self::DEFAULT
     }
+}
+
+impl ThermalSettings {
+    /// The default, as a constant so callers can stay `const`.
+    pub const DEFAULT: Self = Self {
+        talus_degrees: 35.0,
+        strength: 0.5,
+        rounds: 8,
+    };
 }
 
 impl ThermalSettings {

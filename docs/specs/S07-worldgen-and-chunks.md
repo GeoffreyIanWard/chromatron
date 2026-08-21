@@ -178,6 +178,42 @@ erosion stages. Recorded because it is the strongest argument yet for building t
 world map before tuning anything else, and because every assertion in the erosion
 modules passes against the biased surface — it took four renders to find.
 
+**Order independence is verified at the size the criterion states**: a 4x4 area generated
+forwards, then backwards with an unrelated block between each pair, produces identical
+hashes for all sixteen — 48 block generations in 885 s. The intruder matters: reversing
+alone would only show the pipeline does not depend on *direction*. The sixteen are also
+checked to be distinct from one another, or the comparison would be vacuous.
+
+**The pipeline, as one call.** `cx_worldgen::generate_block` — stages 1 to 6 composed,
+a pure function of `(seed, block_coord, settings)`. Six stages threaded by hand at each
+call site would be six chances to thread them differently, and "differently" here means a
+world that does not regenerate.
+
+`WorldSettings` carries all five stages' knobs, so S07's `full-sim` and `no-erosion`
+profiles are two *values* rather than two code paths — which makes `no-erosion` testable as
+the identity rather than as an untaken branch. Every stage still runs under it; a world
+without erosion still needs drainage.
+
+A generated block now keeps **both** the filled surface and the ground beneath it. Their
+difference is standing water: where the fill raised ground, that is a lake, and how far it
+raised it is how deep. Step 7's water body extents come from that and from nothing else,
+and the earlier shape — returning only the filled surface — had thrown it away.
+
+**Concurrency is bounded by memory, not by cores.** S07 asks for 20 s per block on 8
+background threads, which reads as eight blocks at once. The arithmetic says otherwise:
+
+| | |
+|---|---|
+| Resident per block — filled surface, accumulation, drainage order, direction, ground | 0.415 GB |
+| Worst transient — flat resolution's height copy plus two distance maps | 0.293 GB |
+| **Peak per in-flight block** | **~0.71 GB** |
+| Budget | 0.8 GB |
+
+**1.13 blocks fit.** So the pool must generate one block at a time with its threads *inside*
+the block — which is what `ADR-0008` said originally (*"parallelizes by row band"*). Worth
+stating explicitly, because the other reading exceeds the budget by 7x on the first busy
+frontier.
+
 **Step 7: derived static fields (partial).** `cx_worldgen::derive` — slope and aspect
 from baked `ELEVATION`, quantised to a byte each per `bench/memory-budget.md`. Computed
 once and never recomputed: `ADR-0008` removed continuous erosion precisely so these could
