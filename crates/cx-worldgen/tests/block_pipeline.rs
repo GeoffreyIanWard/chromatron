@@ -11,8 +11,8 @@
 //!
 //! # Why it is `#[ignore]`d
 //!
-//! Sixteen blocks, generated twice, with an unrelated block between each pair to
-//! give anything caching state a chance to leak: **48 block generations**. Even
+//! Sixteen blocks, generated twice, plus one unrelated block to give anything
+//! caching state a chance to leak: **33 block generations**. Even
 //! at one erosion round that is minutes, and `cargo test` runs on every commit.
 //!
 //! `pipeline.rs` keeps a fast 2x2 version in its unit tests, because the property
@@ -81,7 +81,7 @@ fn hash(block: &GeneratedBlock) -> u64 {
 }
 
 #[test]
-#[ignore = "48 block generations; run explicitly with --ignored"]
+#[ignore = "33 block generations; run explicitly with --ignored"]
 fn a_four_by_four_area_generates_the_same_in_any_order() {
     let settings = settings();
     let started = Instant::now();
@@ -96,22 +96,22 @@ fn a_four_by_four_area_generates_the_same_in_any_order() {
         .map(|block| hash(&generate_block(SEED, *block, settings)))
         .collect();
 
-    // Backwards, and with an unrelated block generated between each pair.
-    // Reversing alone would only show that the pipeline does not depend on
-    // *direction*; an intruder shows it does not depend on what ran before it at
-    // all.
+    // Backwards, with one unrelated block generated first. Reversing alone
+    // would only show the pipeline does not depend on *direction*; the intruder
+    // shows it does not depend on what ran before it. One intruder, not one per
+    // pair: every regeneration in this pass already acts as "unrelated work"
+    // for the one after it, so per-pair intruders re-proved the same claim
+    // sixteen times — and pushed the CI job over its time limit doing it.
+    let _ = generate_block(SEED, BlockCoord::new(-9, 9), settings);
     let mut backward: Vec<u64> = area
         .iter()
         .rev()
-        .map(|block| {
-            let _ = generate_block(SEED, BlockCoord::new(-9, 9), settings);
-            hash(&generate_block(SEED, *block, settings))
-        })
+        .map(|block| hash(&generate_block(SEED, *block, settings)))
         .collect();
     backward.reverse();
 
     println!(
-        "4x4 order independence: 48 block generations in {:?}",
+        "4x4 order independence: 33 block generations in {:?}",
         started.elapsed()
     );
 
