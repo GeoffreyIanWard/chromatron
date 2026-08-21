@@ -139,6 +139,33 @@ impl FlowNetwork {
         }
     }
 
+    /// Routes flow over a surface that is already known to be pit-free,
+    /// skipping the depression fill.
+    ///
+    /// The fill is the most expensive part of a rebuild (measured: 1.77 s of a
+    /// 3.9 s build), and mid-erosion it does nothing. The implicit erosion
+    /// update is a weighted average of a cell and its receivers, so a cell can
+    /// approach the cell it drains into but never cross below it — erosion
+    /// cannot create a pit, and priority-flood on a pit-free surface is the
+    /// identity. Skipping it changes no output; it skips proving a fact that
+    /// holds by construction. `tests` re-prove the equivalence on a real block,
+    /// because "holds by construction" has been wrong in this project before.
+    ///
+    /// The caller owns the claim that the surface is pit-free. Erosion rounds
+    /// qualify; anything else should use [`FlowNetwork::build`].
+    pub fn build_pit_free(surface: BlockGrid) -> Self {
+        let across_flats = resolve_flats(&surface);
+        let direction = flow_directions(&surface, &across_flats);
+        let (accumulation, order) = accumulate(&surface, &direction);
+
+        Self {
+            filled: surface,
+            direction,
+            accumulation,
+            order,
+        }
+    }
+
     /// The depression-filled surface. Steps 3–5 erode this, not the raw noise.
     pub const fn filled(&self) -> &BlockGrid {
         &self.filled
@@ -596,11 +623,13 @@ fn resolve_flats(filled: &BlockGrid) -> Vec<u32> {
               recomputed."
 )]
 fn flow_directions(filled: &BlockGrid, across_flats: &[u32]) -> Vec<FlowDir> {
+    // Row-parallel: each cell's direction reads only the (shared, immutable)
+    // surface and flat gradients, and writes only its own slot. Same bits at
+    // any thread count — see `crate::parallel`.
     let mut direction = vec![NO_FLOW; CELLS];
-
-    for z in 0..EDGE {
-        for x in 0..EDGE {
-            let Some(cell) = ErosionCell::new(x, z) else {
+    crate::parallel::fill_grid(&mut direction, |z, row| {
+        for (x, slot) in row.iter_mut().enumerate() {
+            let Some(cell) = ErosionCell::new(x as u32, z) else {
                 continue;
             };
             let height = filled.get(cell);
@@ -681,11 +710,9 @@ fn flow_directions(filled: &BlockGrid, across_flats: &[u32]) -> Vec<FlowDir> {
                 }
             }
 
-            if let Some(slot) = direction.get_mut(flat(cell)) {
-                *slot = best;
-            }
+            *slot = best;
         }
-    }
+    });
 
     direction
 }

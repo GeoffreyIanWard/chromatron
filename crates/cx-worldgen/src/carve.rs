@@ -171,51 +171,87 @@ pub fn carve(surface: BlockGrid, network: &FlowNetwork, settings: CarveSettings)
     // the channels meeting there.
     let mut cut = vec![0.0f32; CELLS];
 
-    let mut channel_cells = 0usize;
+    // The widest any stamp can reach, in rows. Bounds how far outside its own
+    // rows a band must look for sources whose trench lands inside them.
+    let max_reach = ((settings.max_width / 2.0) / cell_size).ceil() as u32;
 
-    for z in 0..EDGE {
-        for x in 0..EDGE {
-            let Some(cell) = ErosionCell::new(x, z) else {
-                continue;
-            };
+    // Band-parallel, gather style: each band owns its rows of `cut` and scans
+    // every source within reach — including sources in neighbouring bands —
+    // keeping only the parts of each trench that land on its own rows. A
+    // boundary source gets its geometry recomputed by both bands, which costs a
+    // little redundant arithmetic and buys a race-free, order-independent
+    // result: "deepest cut wins" is a max, and a max is the same whatever order
+    // it meets its inputs in.
+    let channel_counts = crate::parallel::fill_bands_map(&mut cut, |start_z, band| {
+        band.fill(0.0);
+        let band_rows = (band.len() / EDGE as usize) as u32;
+        let mut channel_cells = 0usize;
 
-            let area = network.accumulation(cell) * cell_area;
-            let depth = settings.depth_for(area);
-            if depth <= 0.0 {
-                continue;
-            }
-            channel_cells += 1;
+        let scan_from = start_z.saturating_sub(max_reach);
+        let scan_to = (start_z + band_rows + max_reach).min(EDGE);
 
-            let half_width = (settings.width_for(area) / 2.0).max(cell_size / 2.0);
-            let reach = (half_width / cell_size).ceil() as i32;
+        for z in scan_from..scan_to {
+            for x in 0..EDGE {
+                let Some(cell) = ErosionCell::new(x, z) else {
+                    continue;
+                };
 
-            for dz in -reach..=reach {
-                for dx in -reach..=reach {
-                    let Some(bank) = offset(cell, dx, dz) else {
+                let area = network.accumulation(cell) * cell_area;
+                let depth = settings.depth_for(area);
+                if depth <= 0.0 {
+                    continue;
+                }
+                // Counted once, by the band that owns the source's own row.
+                if z >= start_z && z < start_z + band_rows {
+                    channel_cells += 1;
+                }
+
+                let half_width = (settings.width_for(area) / 2.0).max(cell_size / 2.0);
+                let reach = (half_width / cell_size).ceil() as i32;
+
+                for dz in -reach..=reach {
+                    let Some(tz) = z.checked_add_signed(dz) else {
                         continue;
                     };
-
-                    let distance = ((dx * dx + dz * dz) as f32).sqrt() * cell_size;
-                    if distance > half_width {
+                    // Only rows this band owns.
+                    if tz < start_z || tz >= start_z + band_rows || tz >= EDGE {
                         continue;
                     }
+                    for dx in -reach..=reach {
+                        let Some(tx) = x.checked_add_signed(dx) else {
+                            continue;
+                        };
+                        if tx >= EDGE {
+                            continue;
+                        }
 
-                    // A parabolic cross-section: full depth at the centreline,
-                    // tapering to nothing at the bank. A flat-bottomed trench
-                    // with vertical sides would be a wall for water to pond
-                    // behind, which is the failure this stage has to avoid.
-                    let across = distance / half_width;
-                    let here = depth * (1.0 - across * across);
+                        let distance = ((dx * dx + dz * dz) as f32).sqrt() * cell_size;
+                        if distance > half_width {
+                            continue;
+                        }
 
-                    if let Some(slot) = cut.get_mut(flat(bank))
-                        && here > *slot
-                    {
-                        *slot = here;
+                        // A parabolic cross-section: full depth at the
+                        // centreline, tapering to nothing at the bank. A
+                        // flat-bottomed trench with vertical sides would be a
+                        // wall for water to pond behind, which is the failure
+                        // this stage has to avoid.
+                        let across = distance / half_width;
+                        let here = depth * (1.0 - across * across);
+
+                        let index = (tz - start_z) as usize * EDGE as usize + tx as usize;
+                        if let Some(slot) = band.get_mut(index)
+                            && here > *slot
+                        {
+                            *slot = here;
+                        }
                     }
                 }
             }
         }
-    }
+
+        channel_cells
+    });
+    let channel_cells: usize = channel_counts.iter().sum();
 
     let mut surface = surface;
     let mut carved_cells = 0usize;
@@ -251,16 +287,6 @@ pub fn carve(surface: BlockGrid, network: &FlowNetwork, settings: CarveSettings)
         network: rebuilt,
         report,
     }
-}
-
-fn offset(cell: ErosionCell, dx: i32, dz: i32) -> Option<ErosionCell> {
-    let x = cell.x().checked_add_signed(dx)?;
-    let z = cell.z().checked_add_signed(dz)?;
-    ErosionCell::new(x, z)
-}
-
-const fn flat(cell: ErosionCell) -> usize {
-    (cell.z() as usize) * (EDGE as usize) + (cell.x() as usize)
 }
 
 fn unflat(index: u32) -> Option<ErosionCell> {

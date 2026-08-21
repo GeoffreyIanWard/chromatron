@@ -111,6 +111,10 @@ affordable to have both.
   block against a 0.8 GB budget, so **one block at a time** with threads inside it, not
   eight blocks at once. See S07.
 
+- **Rock hardness** — `cx_worldgen::hardness`. Erodibility varies by place; soft ground
+  tears into fine gullies while hard bands stand as smooth ridges. Directly addresses the
+  uniformity feedback from the M2 status review.
+
 ## Notes
 
 **The seam question gets answered here, visually.** Fine erosion detail cannot be perfectly continuous across block boundaries with a finite halo. Rivers should stay coherent because region-level drainage constrains them from above — verify that first, since it is the failure that would actually be noticeable. If hillside detail shows a visible seam, the mitigations in order of preference are a wider halo, fewer iterations with stronger per-iteration effect, or a post-pass seam blend.

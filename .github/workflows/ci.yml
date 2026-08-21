@@ -150,28 +150,35 @@ jobs:
           cargo test --locked -p cx-app --test debug_draw -- --nocapture
           cargo test --locked -p cx-render --test draw_calls -- --nocapture
 
-      - name: Worldgen exit criteria
-        # M2's headline criterion — a 4x4 block area generated in two orders
-        # must produce identical hashes. `#[ignore]`d in the normal run because
-        # it is 48 block generations; run here, in release, because it is the
-        # property the block cache and replay both rest on.
-        #
-        # **Linux only, deliberately.** The test compares two runs on the *same*
-        # machine, so running it on three platforms tests the same property three
-        # times at three times the cost. `ADR-0004` does target bit-exactness
-        # across machines of one architecture, which would make a per-platform
-        # run meaningful — but checking that needs a *pinned* hash compared
-        # against a constant, not two runs compared with each other. Worth adding
-        # when the pipeline stops changing every PR; until then the constant
-        # would be rewritten by every terrain change and become noise.
-        #
-        # One line, not two. `\` is not a line continuation in PowerShell, and
-        # this job's matrix includes windows-latest: the first version of this
-        # step failed there with "Missing expression after unary operator '--'"
-        # without ever running the test.
-        if: runner.os == 'Linux'
-        timeout-minutes: 45
-        run: cargo test --locked -p cx-worldgen --test block_pipeline --release -- --ignored --nocapture
+  # M2's headline criterion — a 4x4 block area generated in two orders must
+  # produce identical hashes. It is the property the block cache and replay
+  # both rest on, so it gates every PR; it is `#[ignore]`d in the normal test
+  # run because it is ~33 block generations of work.
+  #
+  # Its own job, deliberately. The first placement appended it to the end of
+  # the fmt/clippy/test job, and the two together rode the 45-minute job
+  # ceiling — one PR passed at 42m52s and its stacked successor failed at
+  # 45m15s, a coin flip decided by runner speed. As a separate job it runs in
+  # parallel with the matrix instead of after it, so neither stacks on the
+  # other's clock.
+  #
+  # Linux only: the test compares two runs on the *same* machine, so running
+  # it per-platform would prove the same property three times at three times
+  # the cost. Cross-machine bit-exactness (ADR-0004) needs a *pinned* hash
+  # compared against a constant — worth adding when the pipeline stops
+  # changing every PR; until then the constant would be rewritten constantly
+  # and become noise.
+  worldgen-exit-criteria:
+    name: worldgen exit criteria
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install toolchain
+        run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        continue-on-error: true
+      - run: cargo test --locked -p cx-worldgen --test block_pipeline --release -- --ignored --nocapture
 
   # S21's graph diff annotates rather than blocking — a check that fails every
   # legitimate architecture change gets switched off within a month. The one
