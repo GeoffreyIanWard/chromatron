@@ -144,14 +144,20 @@ fn a_neighbourhood_activates_then_demotes_within_budget() {
     let underfoot = ChunkCoord::new((mid / CHUNK_SIZE) as i32, (mid / CHUNK_SIZE) as i32);
 
     // Converge: done when the whole Active neighbourhood is Active.
-    let reports = run_until(&mut lifecycle, (mid, mid), (0.0, 0.0), ARRIVAL_PATIENCE, |life, _| {
-        (-settings.active_radius..=settings.active_radius).all(|dz| {
-            (-settings.active_radius..=settings.active_radius).all(|dx| {
-                life.residency(ChunkCoord::new(underfoot.x + dx, underfoot.z + dz))
-                    == Some(Residency::Active)
+    let reports = run_until(
+        &mut lifecycle,
+        (mid, mid),
+        (0.0, 0.0),
+        ARRIVAL_PATIENCE,
+        |life, _| {
+            (-settings.active_radius..=settings.active_radius).all(|dz| {
+                (-settings.active_radius..=settings.active_radius).all(|dx| {
+                    life.residency(ChunkCoord::new(underfoot.x + dx, underfoot.z + dz))
+                        == Some(Residency::Active)
+                })
             })
-        })
-    });
+        },
+    );
     assert_invariants(&reports, settings);
 
     assert_eq!(
@@ -203,9 +209,13 @@ fn ten_thousand_dormant_chunks_fit_the_budget() {
     let mut lifecycle = ChunkLifecycle::start(SEED, cheapest(), test_settings(), None);
 
     let mid = BLOCK_SIZE / 2.0;
-    let reports = run_until(&mut lifecycle, (mid, mid), (0.0, 0.0), ARRIVAL_PATIENCE, |life, _| {
-        life.summary(ChunkCoord::new(0, 0)).is_some()
-    });
+    let reports = run_until(
+        &mut lifecycle,
+        (mid, mid),
+        (0.0, 0.0),
+        ARRIVAL_PATIENCE,
+        |life, _| life.summary(ChunkCoord::new(0, 0)).is_some(),
+    );
     assert!(
         !reports.is_empty(),
         "the block never arrived, so nothing was measured"
@@ -264,12 +274,18 @@ fn a_200_ms_traversal_keeps_ground_under_the_camera() {
 
     // Warm up standing still until the ground underfoot is Active.
     let start = (BLOCK_SIZE * 0.25, BLOCK_SIZE / 2.0);
-    let warmup = run_until(&mut lifecycle, start, (200.0, 0.0), ARRIVAL_PATIENCE, |life, _| {
-        life.residency(ChunkCoord::new(
-            (start.0 / CHUNK_SIZE) as i32,
-            (start.1 / CHUNK_SIZE) as i32,
-        )) == Some(Residency::Active)
-    });
+    let warmup = run_until(
+        &mut lifecycle,
+        start,
+        (200.0, 0.0),
+        ARRIVAL_PATIENCE,
+        |life, _| {
+            life.residency(ChunkCoord::new(
+                (start.0 / CHUNK_SIZE) as i32,
+                (start.1 / CHUNK_SIZE) as i32,
+            )) == Some(Residency::Active)
+        },
+    );
     assert_invariants(&warmup, lifecycle_settings);
 
     // Now move: 200 m/s east at 30 Hz for 40 simulated seconds — one and a
