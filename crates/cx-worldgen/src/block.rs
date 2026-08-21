@@ -133,6 +133,19 @@ impl BlockGrid {
         Self { cells }
     }
 
+    /// A grid from raw cells, or `None` when the length is wrong.
+    ///
+    /// For the block cache's load path. Length-checked because the bytes came
+    /// from disk: a wrong-sized grid indexed row-major would smear every row
+    /// sideways, which draws plausible terrain in the wrong place.
+    pub fn from_cells(cells: Vec<f32>) -> Option<Self> {
+        if cells.len() == CELLS {
+            Some(Self { cells })
+        } else {
+            None
+        }
+    }
+
     /// The value at a cell.
     pub fn get(&self, cell: ErosionCell) -> f32 {
         // `ErosionCell` cannot be out of range, so this index is in bounds by
