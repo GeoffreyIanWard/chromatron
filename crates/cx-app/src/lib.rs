@@ -33,7 +33,7 @@ pub mod window;
 
 /// Re-exported from `cx-render` so a client can build and hand over terrain
 /// meshes without depending on the render crate directly.
-pub use cx_render::{TerrainMeshData, TerrainStats};
+pub use cx_render::{TerrainMeshData, TerrainStats, WaterMeshData};
 /// Re-exported from `cx-ui`, which owns them: the overlay's buttons and the
 /// keyboard produce the same actions, so they are defined once.
 pub use cx_ui::{Action, Response};

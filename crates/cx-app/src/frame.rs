@@ -179,10 +179,15 @@ impl FrameLoop {
     /// resident and drawn until [`FrameLoop::remove_terrain_chunk`] drops it.
     /// The chunk lifecycle decides when either happens; this is just the door
     /// its decisions reach the GPU through.
-    pub fn upload_terrain_chunk(&mut self, chunk: ChunkCoord, mesh: &TerrainMeshData) {
+    pub fn upload_terrain_chunk(
+        &mut self,
+        chunk: ChunkCoord,
+        mesh: &TerrainMeshData,
+        water: Option<&cx_render::WaterMeshData>,
+    ) {
         self.renderer
             .terrain_mut()
-            .upload(&self.device, chunk, mesh);
+            .upload(&self.device, chunk, mesh, water);
     }
 
     /// Drops one terrain chunk's mesh, if resident.

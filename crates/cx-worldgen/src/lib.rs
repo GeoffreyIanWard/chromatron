@@ -47,6 +47,7 @@ pub(crate) mod parallel;
 pub mod pipeline;
 pub mod pool;
 pub mod thermal;
+pub mod water;
 pub mod worldmap;
 
 pub use bake::{BakeSettings, ChunkElevation, bake_chunk};
@@ -64,4 +65,5 @@ pub use module::{ELEVATION, UNGENERATED, Worldgen, WorldgenModule, generate_elev
 pub use pipeline::{BlockReport, GeneratedBlock, WorldSettings, generate_block};
 pub use pool::GenerationPool;
 pub use thermal::{ThermalReport, ThermalSettings, relax};
+pub use water::{ChunkWater, WATER_CELLS_PER_CHUNK_EDGE, WaterSettings, bake_water};
 pub use worldmap::{WorldMap, WorldMapSettings};
