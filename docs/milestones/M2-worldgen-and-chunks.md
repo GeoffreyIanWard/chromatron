@@ -101,8 +101,12 @@ affordable to have both.
   block keeps the ground surface as well as the filled one, so water bodies are computable.
 - **M2's headline exit criterion is met**: a 4×4 area generated in two orders produces
   identical hashes — 48 block generations in 885 s, all 16 blocks matching and all 16
-  distinct. Gated in CI; `#[ignore]`d locally because of the runtime. The fast 2×2
-  equivalent in `pipeline.rs` runs on every commit.
+  distinct. Gated in CI on Linux only — the test compares two runs on the *same* machine,
+  so running it per-platform would test the same property three times. Cross-platform
+  bit-exactness, which `ADR-0004` does target, needs a **pinned** hash rather than two runs
+  compared with each other; worth adding once the pipeline stops changing every PR.
+  `#[ignore]`d locally because of the runtime; the fast 2×2 in `pipeline.rs` runs on every
+  commit.
 - **The generation pool's shape is settled by arithmetic**: peak ~0.71 GB per in-flight
   block against a 0.8 GB budget, so **one block at a time** with threads inside it, not
   eight blocks at once. See S07.

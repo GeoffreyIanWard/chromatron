@@ -153,12 +153,25 @@ jobs:
       - name: Worldgen exit criteria
         # M2's headline criterion — a 4x4 block area generated in two orders
         # must produce identical hashes. `#[ignore]`d in the normal run because
-        # it is 48 block generations, which is minutes; run here, in release,
-        # because it is the property the block cache and replay both rest on.
-        timeout-minutes: 30
-        run: |
-          cargo test --locked -p cx-worldgen --test block_pipeline --release \
-            -- --ignored --nocapture
+        # it is 48 block generations; run here, in release, because it is the
+        # property the block cache and replay both rest on.
+        #
+        # **Linux only, deliberately.** The test compares two runs on the *same*
+        # machine, so running it on three platforms tests the same property three
+        # times at three times the cost. `ADR-0004` does target bit-exactness
+        # across machines of one architecture, which would make a per-platform
+        # run meaningful — but checking that needs a *pinned* hash compared
+        # against a constant, not two runs compared with each other. Worth adding
+        # when the pipeline stops changing every PR; until then the constant
+        # would be rewritten by every terrain change and become noise.
+        #
+        # One line, not two. `\` is not a line continuation in PowerShell, and
+        # this job's matrix includes windows-latest: the first version of this
+        # step failed there with "Missing expression after unary operator '--'"
+        # without ever running the test.
+        if: runner.os == 'Linux'
+        timeout-minutes: 45
+        run: cargo test --locked -p cx-worldgen --test block_pipeline --release -- --ignored --nocapture
 
   # S21's graph diff annotates rather than blocking — a check that fails every
   # legitimate architecture change gets switched off within a month. The one
