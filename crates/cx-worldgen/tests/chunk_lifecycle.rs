@@ -48,6 +48,30 @@ fn cheapest() -> WorldSettings {
     }
 }
 
+/// Lifecycle settings sized for a CI runner, not a workstation.
+///
+/// The default frontier queues up to 24 look-ahead blocks; on a 4-core runner
+/// each takes a minute to make and they all compete with the block the test is
+/// actually waiting for. A tight frontier keeps the background pool working on
+/// exactly the blocks the assertions read.
+fn test_settings() -> LifecycleSettings {
+    LifecycleSettings {
+        frontier: cx_worldgen::FrontierSettings {
+            lead_seconds: 10.0,
+            radius_blocks: 1,
+            max_blocks: 4,
+        },
+        ..LifecycleSettings::DEFAULT
+    }
+}
+
+/// Ticks of patience for anything that waits on a block arriving. ~2.2 real
+/// minutes — a fresh cheap block takes ~8 s here and up to a minute on a
+/// 4-core CI runner, and the first version's 30 s was exactly the difference
+/// between passing locally and failing in CI. Converged loops exit early, so
+/// fast machines never pay this.
+const ARRIVAL_PATIENCE: usize = 4_000;
+
 fn scratch_cache(name: &str) -> BlockCache {
     let root = std::env::temp_dir()
         .join("cx-worldgen-lifecycle-tests")
@@ -112,7 +136,7 @@ fn assert_invariants(reports: &[LifecycleReport], settings: LifecycleSettings) {
 /// budget, and never past the cap. Then walking away demotes it the same way.
 #[test]
 fn a_neighbourhood_activates_then_demotes_within_budget() {
-    let settings = LifecycleSettings::DEFAULT;
+    let settings = test_settings();
     let mut lifecycle = ChunkLifecycle::start(SEED, cheapest(), settings, None);
 
     // Stand in the middle of block (0,0).
@@ -120,7 +144,7 @@ fn a_neighbourhood_activates_then_demotes_within_budget() {
     let underfoot = ChunkCoord::new((mid / CHUNK_SIZE) as i32, (mid / CHUNK_SIZE) as i32);
 
     // Converge: done when the whole Active neighbourhood is Active.
-    let reports = run_until(&mut lifecycle, (mid, mid), (0.0, 0.0), 900, |life, _| {
+    let reports = run_until(&mut lifecycle, (mid, mid), (0.0, 0.0), ARRIVAL_PATIENCE, |life, _| {
         (-settings.active_radius..=settings.active_radius).all(|dz| {
             (-settings.active_radius..=settings.active_radius).all(|dx| {
                 life.residency(ChunkCoord::new(underfoot.x + dx, underfoot.z + dz))
@@ -176,10 +200,10 @@ fn a_neighbourhood_activates_then_demotes_within_budget() {
 /// memory budget allocates to resident chunk aggregates.
 #[test]
 fn ten_thousand_dormant_chunks_fit_the_budget() {
-    let mut lifecycle = ChunkLifecycle::start(SEED, cheapest(), LifecycleSettings::DEFAULT, None);
+    let mut lifecycle = ChunkLifecycle::start(SEED, cheapest(), test_settings(), None);
 
     let mid = BLOCK_SIZE / 2.0;
-    let reports = run_until(&mut lifecycle, (mid, mid), (0.0, 0.0), 900, |life, _| {
+    let reports = run_until(&mut lifecycle, (mid, mid), (0.0, 0.0), ARRIVAL_PATIENCE, |life, _| {
         life.summary(ChunkCoord::new(0, 0)).is_some()
     });
     assert!(
@@ -235,12 +259,12 @@ fn a_200_ms_traversal_keeps_ground_under_the_camera() {
             .expect("the scratch directory is writable");
     }
 
-    let lifecycle_settings = LifecycleSettings::DEFAULT;
+    let lifecycle_settings = test_settings();
     let mut lifecycle = ChunkLifecycle::start(SEED, settings, lifecycle_settings, Some(cache));
 
     // Warm up standing still until the ground underfoot is Active.
     let start = (BLOCK_SIZE * 0.25, BLOCK_SIZE / 2.0);
-    let warmup = run_until(&mut lifecycle, start, (200.0, 0.0), 900, |life, _| {
+    let warmup = run_until(&mut lifecycle, start, (200.0, 0.0), ARRIVAL_PATIENCE, |life, _| {
         life.residency(ChunkCoord::new(
             (start.0 / CHUNK_SIZE) as i32,
             (start.1 / CHUNK_SIZE) as i32,
