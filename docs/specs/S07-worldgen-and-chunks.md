@@ -340,6 +340,22 @@ layer.
 Steps 8–9 remain, plus the rest of step 7: biome assignment, scatter, floodplain masks,
 traversability, and water body extents.
 
+**The block cache.** `cx_worldgen::cache::BlockCache` — generate once, reload from disk
+after. An entry stores only the carved ground surface (~100 MB, inside the budgeted
+100–200 MB per block): the final terrain is that surface with its basins refilled and the
+drainage re-routed, both recomputable in seconds by the same code that produced them, so
+storing them would be paying disk for what the generator already guarantees.
+
+Keyed by `(GENERATOR_VERSION, seed, block, settings fingerprint)`. Every mismatch — wrong
+version, different settings, flipped bit, truncated file — is treated as a miss, never an
+error: the generator is the source of truth and the cache is only a shortcut to it. Writes
+go through a temp file and rename so a crash mid-write cannot leave a plausible-looking
+half-entry. Size-capped with oldest-first eviction. M2's "delete the cache, replay,
+identical world" criterion is a test, proven as bit-equality in both directions.
+
+`GENERATOR_VERSION` must be bumped in any PR that changes terrain output — a stale version
+key is the one failure the cache cannot detect by itself.
+
 **Generation speed, first pass.** A block went from ~121 s to ~44 s through three
 changes, in order of what they bought:
 

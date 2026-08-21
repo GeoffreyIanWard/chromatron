@@ -44,6 +44,76 @@ use crate::hydraulic::ErosionSettings;
 use crate::thermal::ThermalSettings;
 use crate::worldmap::WorldMapSettings;
 
+/// Bumped whenever any stage's output changes for the same inputs.
+///
+/// The block cache keys on this, so a pipeline change silently invalidates
+/// every cached block instead of silently serving terrain the current code
+/// would not produce. Forgetting to bump it is the failure to fear: the cache
+/// would keep handing out stale terrain and every "why does regeneration
+/// differ" investigation would start from a false premise. The
+/// cache-vs-regenerate equivalence test in `cache.rs` is the backstop — it
+/// fails on the first machine with a stale cache directory... which a test
+/// tempdir never is, so treat the bump as part of any terrain-changing PR.
+pub const GENERATOR_VERSION: u32 = 1;
+
+impl WorldSettings {
+    /// A stable digest of every knob that shapes terrain.
+    ///
+    /// Part of the cache key: two different settings must never share a cache
+    /// entry, or switching world presets would serve the old preset's terrain.
+    /// Field-by-field over the raw float bits, so any change to any knob — or
+    /// adding a field and forgetting to include it here — shows up as a
+    /// different world rather than a stale one. Keep this in sync with the
+    /// struct; the compiler cannot do it for us.
+    pub fn fingerprint(&self) -> u64 {
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        let mut eat = |bits: u32| {
+            for byte in bits.to_le_bytes() {
+                hash ^= u64::from(byte);
+                hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        };
+
+        let w = &self.world;
+        for value in [w.relief, w.base, w.wavelength, w.persistence] {
+            eat(value.to_bits());
+        }
+        eat(w.octaves);
+
+        let t = &self.terrain;
+        for value in [t.relief, t.base, t.feature_size, t.persistence] {
+            eat(value.to_bits());
+        }
+        eat(t.octaves);
+
+        let e = &self.erosion;
+        for value in [e.erodibility, e.area_exponent, e.timestep] {
+            eat(value.to_bits());
+        }
+        eat(e.rounds);
+        eat(e.hardness.wavelength.to_bits());
+        eat(e.hardness.contrast.to_bits());
+
+        let th = &self.thermal;
+        eat(th.talus_degrees.to_bits());
+        eat(th.strength.to_bits());
+        eat(th.rounds);
+
+        let c = &self.carve;
+        for value in [
+            c.channel_threshold,
+            c.depth_coefficient,
+            c.width_coefficient,
+            c.max_depth,
+            c.max_width,
+        ] {
+            eat(value.to_bits());
+        }
+
+        hash
+    }
+}
+
 /// Everything a world's terrain is shaped by.
 ///
 /// One struct rather than five arguments: these travel together through every

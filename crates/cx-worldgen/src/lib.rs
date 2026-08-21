@@ -33,6 +33,7 @@
 
 pub mod bake;
 pub mod block;
+pub mod cache;
 pub mod carve;
 pub mod derive;
 pub mod elevation;
@@ -47,6 +48,7 @@ pub mod worldmap;
 
 pub use bake::{BakeSettings, ChunkElevation, bake_chunk};
 pub use block::{BlockCoordinates, BlockGrid, ErosionCell};
+pub use cache::BlockCache;
 pub use carve::{CarveReport, CarveSettings, carve};
 pub use derive::{ASPECT_FLAT, DerivedFields, derive_fields};
 pub use elevation::{ElevationGenerator, TerrainShape};

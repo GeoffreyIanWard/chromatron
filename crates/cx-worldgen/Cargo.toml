@@ -10,6 +10,7 @@ publish.workspace = true
 # Directly, not through cx-ecs: the `Resource` derive expands to `bevy_ecs::`
 # paths, so the crate has to be nameable here. Same reason as cx-fields.
 bevy_ecs.workspace = true
+bytemuck.workspace = true
 cx-core.workspace = true
 cx-ecs.workspace = true
 cx-fields.workspace = true

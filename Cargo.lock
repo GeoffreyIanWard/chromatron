@@ -1053,6 +1053,7 @@ name = "cx-worldgen"
 version = "0.1.0"
 dependencies = [
  "bevy_ecs",
+ "bytemuck",
  "cx-core",
  "cx-ecs",
  "cx-fields",

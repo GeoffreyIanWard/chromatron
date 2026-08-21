@@ -31,7 +31,7 @@ An effectively infinite world, deterministically generated from a seed, eroded o
 | Terrain mesh bake, one chunk | < 200 ms offline |
 | Flow continuity walk over 100 km of channel | unbroken across chunk *and* block seams |
 | Camera traversal at 200 m/s | frontier never outrun, no frame > 20 ms |
-| Delete block cache, replay | identical world state |
+| Delete block cache, replay | identical world state — **met**, bit-equality test in `cx_worldgen::cache` |
 | 10,000 generated chunks resident as `Dormant` | within memory budget |
 | `no-erosion` profile | generates a valid world; differs from `full-sim` only in terrain shape |
 
@@ -114,6 +114,10 @@ affordable to have both.
 - **Rock hardness** — `cx_worldgen::hardness`. Erodibility varies by place; soft ground
   tears into fine gullies while hard bands stand as smooth ridges. Directly addresses the
   uniformity feedback from the M2 status review.
+
+- **The block cache** — `cx_worldgen::cache`. Generate once (~44 s), reload after (~5 s:
+  read 100 MB + re-route). Stores only the ground surface; terrain and drainage are
+  recomputed on load, bit-identically. The delete-and-replay exit criterion is a test.
 
 ## Notes
 
