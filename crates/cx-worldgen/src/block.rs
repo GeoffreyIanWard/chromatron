@@ -119,14 +119,16 @@ impl BlockGrid {
     /// biased identically the result looks like correct terrain in the wrong
     /// place rather than like an off-by-one.
     pub fn base_elevation(generator: &ElevationGenerator, block: BlockCoordinates) -> Self {
-        let mut cells = Vec::with_capacity(CELLS);
-
-        for z in 0..EDGE {
-            for x in 0..EDGE {
-                let (world_x, world_z) = block.cell_centre(x, z);
-                cells.push(generator.height_at(world_x, world_z));
+        // Row-parallel: each cell's height depends only on its coordinates, so
+        // this is the textbook case for `crate::parallel` — same bits at any
+        // thread count, several times faster on a desktop core count.
+        let mut cells = vec![0.0f32; CELLS];
+        crate::parallel::fill_grid(&mut cells, |z, row| {
+            for (x, cell) in row.iter_mut().enumerate() {
+                let (world_x, world_z) = block.cell_centre(x as u32, z);
+                *cell = generator.height_at(world_x, world_z);
             }
-        }
+        });
 
         Self { cells }
     }

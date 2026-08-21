@@ -40,6 +40,7 @@ pub mod flow;
 pub mod hardness;
 pub mod hydraulic;
 pub mod module;
+pub(crate) mod parallel;
 pub mod pipeline;
 pub mod thermal;
 pub mod worldmap;

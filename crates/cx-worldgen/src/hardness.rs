@@ -104,15 +104,15 @@ pub struct HardnessMap {
 impl HardnessMap {
     /// Samples hardness for a whole block, halo included.
     pub fn for_block(seed: u64, block: BlockCoordinates, settings: HardnessSettings) -> Self {
-        let mut cells = Vec::with_capacity(CELLS);
-
-        for z in 0..EDGE {
-            for x in 0..EDGE {
-                let (world_x, world_z) = block.cell_centre(x, z);
+        // Row-parallel, same shape as base elevation: pure per-cell sampling.
+        let mut cells = vec![0u8; CELLS];
+        crate::parallel::fill_grid(&mut cells, |z, row| {
+            for (x, cell) in row.iter_mut().enumerate() {
+                let (world_x, world_z) = block.cell_centre(x as u32, z);
                 let hardness = sample(seed, world_x, world_z, settings.wavelength);
-                cells.push((hardness * 255.0).round().clamp(0.0, 255.0) as u8);
+                *cell = (hardness * 255.0).round().clamp(0.0, 255.0) as u8;
             }
-        }
+        });
 
         // Softest (byte 0) erodes sqrt(contrast) faster than average; hardest
         // (byte 255) erodes sqrt(contrast) slower. Geometric, so doubling the

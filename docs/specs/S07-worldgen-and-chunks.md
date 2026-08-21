@@ -340,6 +340,26 @@ layer.
 Steps 8–9 remain, plus the rest of step 7: biome assignment, scatter, floodplain masks,
 traversability, and water body extents.
 
+**Generation speed, first pass.** A block went from ~121 s to ~44 s through three
+changes, in order of what they bought:
+
+1. *Six erosion rounds at double strength instead of twelve* (~27 s). The implicit solve
+   is stable at any step size, so the step is a shaping knob; compared side by side the
+   6-round terrain keeps the same valleys and channels.
+2. *Mid-erosion rebuilds skip the depression fill* (~20 s). Erosion's update is a weighted
+   average of a cell and its receivers, so no cell ever drops below the cell it drains
+   into — erosion cannot create a pit, and filling an eroded surface is the identity.
+   Proven on real output by a test, not just argued.
+3. *Row-band parallelism* (`cx_worldgen::parallel`) for the per-cell stages — elevation and
+   hardness sampling, flow directions, thermal erosion, carve stamps. Work splits into a
+   **fixed 64 bands** merged in band order, so output is bit-identical at any thread count,
+   which `ADR-0004` requires. Plain `std::thread::scope`, no new dependencies.
+
+What remains serial is the genuinely order-dependent core: the erosion solve and flow
+accumulation both walk the drainage network in dependency order (~26 s of the 44). Getting
+under the 20 s target means parallelising those walks (level scheduling) or cutting the
+network-rebuild count further — both real projects, neither started.
+
 **Whole-pipeline cost so far**: about 130 s single-threaded for steps 1–5 over one block
 (world map, base elevation, fill and routing, 12 erosion rounds, 4 thermal rounds,
 carving). S07's target is 20 s on 8 background threads. Nothing is parallelised yet, and

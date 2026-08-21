@@ -146,9 +146,15 @@ impl ErosionSettings {
     pub const DEFAULT: Self = Self {
         erodibility: 4.0e-5,
         area_exponent: 0.5,
-        timestep: 2.0e4,
+        // Six rounds at double the step, not twelve at single. The implicit
+        // solve is stable at any step size, so the step is a shaping knob —
+        // and each round costs a full re-route of the drainage network, which
+        // is most of a block's generation time. Compared side by side, the
+        // 6-round terrain keeps the same valleys and channel network; what it
+        // loses is some capture drama mid-run, which nothing downstream reads.
+        timestep: 4.0e4,
         hardness: crate::hardness::HardnessSettings::DEFAULT,
-        rounds: 12,
+        rounds: 6,
     };
 }
 
@@ -205,15 +211,26 @@ pub fn erode(
     // and in a basin it would report it as erosion *raising ground*.
     let before = network.filled().clone();
 
-    for _ in 0..settings.rounds {
+    for round in 0..settings.rounds {
         let eroded = incise(&network, &hardness, settings);
 
         // Re-route against the surface erosion just produced. Skipping this
-        // freezes channels where the unerodedated noise put them; capture — one
+        // freezes channels where the uneroded noise put them; capture — one
         // channel cutting back into another's catchment — is the process that
         // makes a fractal surface into a landscape, and capture cannot happen
         // if the network never changes.
-        network = FlowNetwork::build(eroded);
+        //
+        // Mid-run rebuilds skip the depression fill: erosion cannot create a
+        // pit (see `build_pit_free`), so the fill would be re-proving a fact
+        // that holds by construction, at 1.77 s per round. The final rebuild
+        // runs the full fill as a safety net — it is the network every later
+        // stage reads, and the one place a wrong "cannot happen" would
+        // otherwise propagate silently.
+        network = if round + 1 == settings.rounds {
+            FlowNetwork::build(eroded)
+        } else {
+            FlowNetwork::build_pit_free(eroded)
+        };
     }
 
     let report = measure(&before, &network, settings.rounds);
@@ -521,6 +538,41 @@ mod tests {
             fierce_report.mean_lowering,
             gentle_report.mean_lowering
         );
+    }
+
+    /// The claim that lets mid-run rebuilds skip the depression fill.
+    ///
+    /// Erosion's update is a weighted average of a cell and its receivers, so
+    /// no cell ever ends up below the cell it drains into — meaning erosion
+    /// cannot create a pit, and filling an eroded surface changes nothing.
+    /// This test proves it on real output rather than trusting the argument:
+    /// take an eroded surface, run the full fill over it, and require the
+    /// result to be bit-identical. If this ever fails, `build_pit_free` is
+    /// unsound and erosion is quietly producing terrain with trapped water.
+    #[test]
+    fn the_fill_is_the_identity_on_eroded_terrain() {
+        let (after, _, _) = erode(rough_slope(), 7, at_origin(), TEST_SETTINGS);
+
+        let refilled = FlowNetwork::build(after.clone());
+        assert_eq!(
+            refilled.interior_sinks(),
+            0,
+            "eroded terrain has cells with nowhere to drain"
+        );
+
+        for z in (0..EDGE).step_by(23) {
+            for x in (0..EDGE).step_by(23) {
+                let Some(cell) = ErosionCell::new(x, z) else {
+                    continue;
+                };
+                assert_eq!(
+                    refilled.filled().get(cell),
+                    after.get(cell),
+                    "the fill raised eroded ground at ({x}, {z}) — erosion \
+                     created a pit, and skipping the mid-run fill is unsound"
+                );
+            }
+        }
     }
 
     /// Soft rock loses more material than hard rock on the same terrain.

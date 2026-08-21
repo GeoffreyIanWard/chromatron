@@ -150,83 +150,144 @@ pub fn relax(mut surface: BlockGrid, settings: ThermalSettings) -> (BlockGrid, T
     }
 
     for _ in 0..settings.rounds {
-        delta.fill(0.0);
+        // Each band zeroes and fills its own rows of `delta` directly. Material
+        // a band's edge rows shed into the neighbouring band goes into two
+        // spill rows returned to the caller, merged below in band order — so
+        // every float is added in the same sequence on any thread count
+        // (`crate::parallel`'s rule). Within a band the sweep is the same
+        // read-then-write scatter as the serial version.
+        let spills = crate::parallel::fill_bands_map(&mut delta, |start_z, band| {
+            band.fill(0.0);
+            let band_rows = band.len() / EDGE as usize;
+            let mut spill_up = vec![0.0f32; EDGE as usize];
+            let mut spill_down = vec![0.0f32; EDGE as usize];
+            let mut band_moved = 0.0f64;
 
-        for z in 0..EDGE {
-            for x in 0..EDGE {
-                let Some(cell) = ErosionCell::new(x, z) else {
-                    continue;
-                };
-                let height = surface.get(cell);
-
-                // First pass over the neighbours: how much excess is there, and
-                // how is it distributed? Read only — nothing is written until
-                // every cell has been measured against the same surface.
-                let mut excess_total = 0.0f32;
-                let mut deepest_excess = 0.0f32;
-                let mut excesses = [0.0f32; 8];
-
-                for (index, (dx, dz)) in NEIGHBOURS.iter().enumerate() {
-                    let Some(next) = offset(cell, *dx, *dz) else {
+            for z in start_z..start_z + band_rows as u32 {
+                for x in 0..EDGE {
+                    let Some(cell) = ErosionCell::new(x, z) else {
                         continue;
                     };
-                    let allowed = threshold.get(index).copied().unwrap_or(f32::INFINITY);
-                    let excess = (height - surface.get(next)) - allowed;
-                    if excess <= 0.0 {
+                    let height = surface.get(cell);
+
+                    // First pass over the neighbours: how much excess is there,
+                    // and how is it distributed? Read only — nothing is written
+                    // until every cell has been measured against the same
+                    // surface.
+                    let mut excess_total = 0.0f32;
+                    let mut deepest_excess = 0.0f32;
+                    let mut excesses = [0.0f32; 8];
+
+                    for (index, (dx, dz)) in NEIGHBOURS.iter().enumerate() {
+                        let Some(next) = offset(cell, *dx, *dz) else {
+                            continue;
+                        };
+                        let allowed = threshold.get(index).copied().unwrap_or(f32::INFINITY);
+                        let excess = (height - surface.get(next)) - allowed;
+                        if excess <= 0.0 {
+                            continue;
+                        }
+                        if let Some(slot) = excesses.get_mut(index) {
+                            *slot = excess;
+                        }
+                        excess_total += excess;
+                        deepest_excess = deepest_excess.max(excess);
+                    }
+
+                    if excess_total <= 0.0 {
                         continue;
                     }
-                    if let Some(slot) = excesses.get_mut(index) {
-                        *slot = excess;
-                    }
-                    excess_total += excess;
-                    deepest_excess = deepest_excess.max(excess);
-                }
 
-                if excess_total <= 0.0 {
-                    continue;
-                }
+                    // Halved because the neighbour is coming *up* by the same
+                    // amount this cell goes down: to close a gap of `d`, each
+                    // side moves `d/2`. Moving the full excess from each side
+                    // overshoots by exactly a factor of two, and the surface
+                    // rings.
+                    let budget = settings.strength * deepest_excess * 0.5;
 
-                // Halved because the neighbour is coming *up* by the same
-                // amount this cell goes down: to close a gap of `d`, each side
-                // moves `d/2`. Moving the full excess from each side overshoots
-                // by exactly a factor of two, and the surface rings.
-                let budget = settings.strength * deepest_excess * 0.5;
-
-                for (index, (dx, dz)) in NEIGHBOURS.iter().enumerate() {
-                    let share = excesses.get(index).copied().unwrap_or(0.0);
-                    if share <= 0.0 {
-                        continue;
-                    }
-                    let Some(next) = offset(cell, *dx, *dz) else {
-                        continue;
+                    // Writes a delta to a cell that may be just outside this
+                    // band's rows.
+                    let mut add = |tx: u32, tz: u32, amount: f32| {
+                        let column = tx as usize;
+                        if tz + 1 == start_z {
+                            if let Some(slot) = spill_up.get_mut(column) {
+                                *slot += amount;
+                            }
+                        } else if tz == start_z + band_rows as u32 {
+                            if let Some(slot) = spill_down.get_mut(column) {
+                                *slot += amount;
+                            }
+                        } else {
+                            let index = (tz - start_z) as usize * EDGE as usize + column;
+                            if let Some(slot) = band.get_mut(index) {
+                                *slot += amount;
+                            }
+                        }
                     };
 
-                    // Proportional to how far over the limit each neighbour is,
-                    // so the steepest face takes the most. An even split would
-                    // send as much material to a neighbour barely over the angle
-                    // as to a cliff.
-                    let amount = budget * (share / excess_total);
+                    for (index, (dx, dz)) in NEIGHBOURS.iter().enumerate() {
+                        let share = excesses.get(index).copied().unwrap_or(0.0);
+                        if share <= 0.0 {
+                            continue;
+                        }
+                        let Some(next) = offset(cell, *dx, *dz) else {
+                            continue;
+                        };
 
-                    if let Some(slot) = delta.get_mut(flat(cell)) {
-                        *slot -= amount;
+                        // Proportional to how far over the limit each neighbour
+                        // is, so the steepest face takes the most. An even
+                        // split would send as much material to a neighbour
+                        // barely over the angle as to a cliff.
+                        let amount = budget * (share / excess_total);
+
+                        add(cell.x(), cell.z(), -amount);
+                        add(next.x(), next.z(), amount);
+                        band_moved += f64::from(amount);
                     }
-                    if let Some(slot) = delta.get_mut(flat(next)) {
+                }
+            }
+
+            (start_z, band_rows, spill_up, spill_down, band_moved)
+        });
+
+        // Merge the spill rows and the moved totals, in band order.
+        for (start_z, band_rows, spill_up, spill_down, band_moved) in spills {
+            if start_z > 0 {
+                for (x, amount) in spill_up.iter().enumerate() {
+                    if *amount != 0.0
+                        && let Some(slot) =
+                            delta.get_mut((start_z as usize - 1) * EDGE as usize + x)
+                    {
                         *slot += amount;
                     }
-                    moved += f64::from(amount);
                 }
             }
+            let below = start_z as usize + band_rows;
+            if below < EDGE as usize {
+                for (x, amount) in spill_down.iter().enumerate() {
+                    if *amount != 0.0
+                        && let Some(slot) = delta.get_mut(below * EDGE as usize + x)
+                    {
+                        *slot += amount;
+                    }
+                }
+            }
+            moved += band_moved;
         }
 
-        for (index, change) in delta.iter().enumerate() {
-            if *change == 0.0 {
-                continue;
+        // Apply, row-parallel: each cell adds its own delta, nothing crosses.
+        let delta_ref = &delta;
+        crate::parallel::fill_grid(surface.as_mut_slice(), |z, row| {
+            for (x, cell) in row.iter_mut().enumerate() {
+                let change = delta_ref
+                    .get(z as usize * EDGE as usize + x)
+                    .copied()
+                    .unwrap_or(0.0);
+                if change != 0.0 {
+                    *cell += change;
+                }
             }
-            let Some(cell) = unflat(index as u32) else {
-                continue;
-            };
-            surface.set(cell, surface.get(cell) + *change);
-        }
+        });
     }
 
     let report = measure(&surface, &threshold, settings.rounds, moved);
@@ -290,14 +351,6 @@ fn offset(cell: ErosionCell, dx: i32, dz: i32) -> Option<ErosionCell> {
     let x = cell.x().checked_add_signed(dx)?;
     let z = cell.z().checked_add_signed(dz)?;
     ErosionCell::new(x, z)
-}
-
-const fn flat(cell: ErosionCell) -> usize {
-    (cell.z() as usize) * (EDGE as usize) + (cell.x() as usize)
-}
-
-fn unflat(index: u32) -> Option<ErosionCell> {
-    ErosionCell::new(index % EDGE, index / EDGE)
 }
 
 #[cfg(test)]
