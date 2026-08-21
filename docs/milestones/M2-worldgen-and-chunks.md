@@ -88,6 +88,11 @@ affordable to have both.
 - **Steps 1–5 now run end to end** at roughly 130 s single-threaded per block, against a 20 s
   target on 8 threads. Nothing is parallelised yet and erosion's re-routing dominates.
 
+- **Step 6, the bake** — `cx_worldgen::bake`. Catmull-Rom resample from 2 m to 0.5 m plus
+  drainage-faded detail, closing out `ADR-0015`. Both of the ADR's named correctness
+  questions are now tested, and both tests had to be strengthened after falsification
+  showed they passed against the exact artifacts they existed to exclude.
+
 ## Notes
 
 **The seam question gets answered here, visually.** Fine erosion detail cannot be perfectly continuous across block boundaries with a finite halo. Rivers should stay coherent because region-level drainage constrains them from above — verify that first, since it is the failure that would actually be noticeable. If hillside detail shows a visible seam, the mitigations in order of preference are a wider halo, fewer iterations with stronger per-iteration effect, or a post-pass seam blend.
