@@ -221,10 +221,10 @@ fn fill_coarse(heights: &mut [f32], width: usize, height: usize) {
     };
 
     let push = |heap: &mut BinaryHeap<Reverse<(u32, u32)>>,
-                    done: &mut [bool],
-                    x: usize,
-                    z: usize,
-                    h: f32| {
+                done: &mut [bool],
+                x: usize,
+                z: usize,
+                h: f32| {
         let at = index(x, z);
         if let Some(slot) = done.get_mut(at)
             && !*slot
