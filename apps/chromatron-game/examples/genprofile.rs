@@ -97,6 +97,50 @@ fn main() {
         }
     }
     println!("terrain hash        {hash:#018x}");
+    // The two per-chunk exit criteria (S07/M2): extraction from a resident
+    // block under 5 ms, and the full-resolution bake under 200 ms. Measured
+    // on the block just generated, over a handful of chunks so one lucky
+    // cache line does not write the milestone numbers.
+    let network = cx_worldgen::FlowNetwork::build(carved.drained.clone());
+    let block = cx_worldgen::GeneratedBlock {
+        coordinates,
+        terrain: carved.drained,
+        ground: carved.ground,
+        network,
+        generator,
+        report: cx_worldgen::BlockReport {
+            erosion,
+            thermal,
+            carve: carved.report,
+        },
+    };
+    let mut worst_bake = std::time::Duration::ZERO;
+    let mut worst_water = std::time::Duration::ZERO;
+    let mut worst_fields = std::time::Duration::ZERO;
+    for chunk in [(0, 0), (7, 7), (15, 15), (3, 12)] {
+        let chunk = cx_core::math::ChunkCoord::new(chunk.0, chunk.1);
+        let stage = Instant::now();
+        let baked = cx_worldgen::bake_chunk(
+            &block.terrain,
+            &block.network,
+            &block.generator,
+            block.coordinates,
+            chunk,
+            cx_worldgen::BakeSettings::SMOOTH,
+        );
+        worst_bake = worst_bake.max(stage.elapsed());
+        let stage = Instant::now();
+        let _ = cx_worldgen::bake_water(&block, chunk, cx_worldgen::WaterSettings::DEFAULT);
+        worst_water = worst_water.max(stage.elapsed());
+        if let Some(baked) = baked {
+            let stage = Instant::now();
+            let _ = cx_worldgen::derive_fields(&baked);
+            worst_fields = worst_fields.max(stage.elapsed());
+        }
+    }
+    println!("worst chunk bake    {worst_bake:>8.2?} (criterion: < 200 ms)");
+    println!("worst chunk water   {worst_water:>8.2?}");
+    println!("worst derive fields {worst_fields:>8.2?}");
     println!(
         "(erosion mean lowering {:.2} m, carve deepest {:.1} m)",
         erosion.mean_lowering, carved.report.deepest

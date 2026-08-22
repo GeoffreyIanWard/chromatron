@@ -58,11 +58,12 @@ const WATER_LIFT: f32 = 0.15;
 
 /// Chunk meshes built per frame, at most.
 ///
-/// Meshing an Active chunk is around a millisecond; the budget exists so that
-/// arriving in a fresh region rebuilds the neighbourhood over a few frames
-/// instead of spending one long frame on all of it — the same amortization
-/// the lifecycle itself applies to promotions.
-const MESHES_PER_FRAME: usize = 2;
+/// Meshing an Active chunk costs a few milliseconds; the budget exists so
+/// that arriving in a fresh region rebuilds the neighbourhood over a few
+/// frames instead of spending one long frame on all of it — the same
+/// amortization the lifecycle itself applies to promotions, and set to one
+/// for the same 20 ms frame-budget reason.
+const MESHES_PER_FRAME: usize = 1;
 
 /// Turns lifecycle decisions into resident GPU meshes.
 ///
@@ -83,6 +84,15 @@ struct TerrainDriver {
     known: usize,
     /// Whether the camera has been dropped onto arrived terrain yet.
     grounded: bool,
+    /// Metres per second of scripted straight-line flight, when the
+    /// `CX_AUTOFLY` environment variable asked for the traversal measurement.
+    autofly: Option<f32>,
+    /// Worst frame delta seen since the flight settled, seconds.
+    worst_frame: f32,
+    /// Frames where the chunk underfoot had not reached Coarse, after settle.
+    underfoot_misses: u32,
+    /// Frames measured since settling.
+    measured_frames: u32,
 }
 
 impl TerrainDriver {
@@ -109,12 +119,43 @@ impl TerrainDriver {
             previous: None,
             known: 0,
             grounded: false,
+            autofly: std::env::var("CX_AUTOFLY")
+                .ok()
+                .and_then(|v| v.parse::<f32>().ok()),
+            worst_frame: 0.0,
+            underfoot_misses: 0,
+            measured_frames: 0,
         }
     }
 
     /// One frame of terrain work: aim the lifecycle, then close the gap
     /// between what it holds and what the GPU shows.
     fn sync(&mut self, frame_loop: &mut FrameLoop, camera: &mut FlyCamera, dt: f32) {
+        // The M2 traversal measurement, on demand: fly due east at a fixed
+        // speed and keep score. Measurement starts only once terrain has
+        // arrived (`grounded`), so startup generation is not billed as
+        // frame time.
+        if let Some(speed) = self.autofly {
+            camera.position = camera.position.offset(Vec3::new(speed * dt, 0.0, 0.0));
+            if self.grounded {
+                self.measured_frames += 1;
+                self.worst_frame = self.worst_frame.max(dt);
+                let underfoot = self.lifecycle.residency(camera.position.chunk);
+                if !matches!(underfoot, Some(Residency::Coarse | Residency::Active)) {
+                    self.underfoot_misses += 1;
+                }
+                if self.measured_frames.is_multiple_of(600) {
+                    tracing::info!(
+                        speed,
+                        frames = self.measured_frames,
+                        worst_frame_ms = self.worst_frame * 1_000.0,
+                        underfoot_misses = self.underfoot_misses,
+                        "autofly traversal"
+                    );
+                }
+            }
+        }
+
         let position = camera.position;
         let interest = (
             position.chunk.x as f32 * CHUNK_SIZE + position.local.x,
@@ -128,7 +169,12 @@ impl TerrainDriver {
             _ => (0.0, 0.0),
         };
 
+        // View-side diagnostics at the outermost edge, the same exemption
+        // the window driver documents: nothing measured here enters the sim.
+        #[allow(clippy::disallowed_methods)]
+        let update_started = std::time::Instant::now();
         let report = self.lifecycle.update(interest, velocity);
+        let update_ms = update_started.elapsed().as_secs_f32() * 1_000.0;
 
         // A block arriving is the demo's biggest event — up to 256 chunks of
         // terrain becoming buildable at once — and on a cold cache it is tens
@@ -235,6 +281,11 @@ impl TerrainDriver {
                 self.meshed.insert((chunk.x, chunk.z), residency);
                 budget -= 1;
             }
+        }
+
+        let mesh_ms = update_started.elapsed().as_secs_f32() * 1_000.0 - update_ms;
+        if update_ms > 15.0 || mesh_ms > 15.0 {
+            tracing::info!(update_ms, mesh_ms, "slow terrain tick");
         }
     }
 }

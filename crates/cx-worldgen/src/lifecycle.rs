@@ -187,13 +187,19 @@ pub struct LifecycleSettings {
 
 impl LifecycleSettings {
     /// Defaults: a 5x5 Active neighbourhood inside a 13x13 Coarse ring —
-    /// everything further is Dormant — two promotions and four demotions a
+    /// everything further is Dormant — one promotion and four demotions a
     /// tick, two resident blocks.
+    ///
+    /// One promotion, not two: a promotion to Active costs ~7 ms of baking on
+    /// the calling thread, and the M2 traversal criterion charges that to the
+    /// frame. Two promotions put the worst tick at ~17 ms before the frame
+    /// drew anything; one keeps the whole frame under the 20 ms budget, and a
+    /// 5x5 neighbourhood still activates in under half a second.
     pub const DEFAULT: Self = Self {
         active_radius: 2,
         coarse_radius: 6,
         active_cap: 32,
-        promotions_per_tick: 2,
+        promotions_per_tick: 1,
         demotions_per_tick: 4,
         resident_blocks: 2,
         frontier: FrontierSettings::DEFAULT,
