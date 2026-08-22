@@ -336,6 +336,7 @@ mod tests {
 
     /// **`no-erosion` leaves the surface alone** (S07).
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn carving_nothing_changes_nothing() {
         let (before, after, report) = carved(CarveSettings::NONE);
 
@@ -359,6 +360,7 @@ mod tests {
     /// hundred. Wiring these to the wrong exponent produces a trunk river that
     /// dwarfs everything feeding it.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn width_and_depth_follow_the_specified_power_laws() {
         let settings = CarveSettings {
             max_depth: f32::INFINITY,
@@ -384,6 +386,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn nothing_below_the_threshold_is_carved() {
         let settings = CarveSettings::default();
         assert_eq!(settings.depth_for(settings.channel_threshold - 1.0), 0.0);
@@ -392,6 +395,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn the_caps_bound_an_unbounded_power_law() {
         let settings = CarveSettings::default();
         // A catchment far larger than any block could hold.
@@ -402,6 +406,7 @@ mod tests {
 
     /// **Carving only ever lowers**, and only near channels.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn carving_lowers_channels_and_leaves_hillslopes_alone() {
         let (before, after, report) = carved(CarveSettings::default());
 
@@ -436,6 +441,7 @@ mod tests {
     /// Cutting a trench into a surface is exactly how to make water disappear
     /// into one. Counted rather than argued.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn carving_leaves_no_water_trapped() {
         let (_, _, report) = carved(CarveSettings::default());
         assert_eq!(
@@ -448,6 +454,7 @@ mod tests {
     /// A deeper setting cuts deeper. Without this, the coefficient could be
     /// wired to nothing and every test above would still pass.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn a_larger_coefficient_cuts_deeper() {
         let (_, _, shallow) = carved(CarveSettings {
             depth_coefficient: 0.004,
@@ -468,6 +475,7 @@ mod tests {
 
     /// The same surface carves the same way twice (`ADR-0006`).
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn carving_is_reproducible() {
         let (_, first, first_report) = carved(CarveSettings::default());
         let (_, second, second_report) = carved(CarveSettings::default());

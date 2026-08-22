@@ -320,6 +320,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn water_matches_the_two_surfaces_and_the_network() {
         let block = generated();
         let settings = WaterSettings::DEFAULT;
@@ -371,6 +372,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn a_dry_chunk_is_none_not_zeros() {
         // With both thresholds infinite nothing qualifies as water, so every
         // chunk must come back None — the contract that dryness costs no
@@ -393,12 +395,14 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn outside_the_block_is_none() {
         let block = generated();
         assert!(bake_water(block, ChunkCoord::new(1_000, 1_000), WaterSettings::DEFAULT).is_none());
     }
 
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn downsampling_keeps_rivers_rather_than_averaging_them_away() {
         let block = generated();
         let origin = block.coordinates.block().origin_chunk();
@@ -426,6 +430,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn an_infinite_threshold_still_finds_lakes() {
         // The no-erosion profile carves nothing (threshold = infinity), but a
         // filled basin is still a lake — lakes are facts, not thresholds.

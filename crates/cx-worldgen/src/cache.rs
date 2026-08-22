@@ -427,6 +427,7 @@ mod tests {
     /// loaded one. Together they are the criterion — the cache is a shortcut
     /// to the generator, never a second source of truth.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn a_cached_block_and_a_regenerated_block_are_identical() {
         let cache = scratch_cache("roundtrip");
         let settings = fast();
@@ -452,6 +453,7 @@ mod tests {
 
     /// Any key mismatch is a miss: seed, block, settings, or pipeline version.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn a_mismatched_key_never_serves_a_block() {
         let cache = scratch_cache("keys");
         let settings = fast();
@@ -486,6 +488,7 @@ mod tests {
 
     /// A flipped bit is a miss, not wrong terrain.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn corruption_is_a_miss_rather_than_wrong_terrain() {
         let cache = scratch_cache("corruption");
         let settings = fast();
@@ -517,6 +520,7 @@ mod tests {
 
     /// The cap evicts the oldest entries first, and only past the cap.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn eviction_removes_the_oldest_entries_past_the_cap() {
         let settings = fast();
         // Cap sized for roughly two entries, so storing three evicts one.

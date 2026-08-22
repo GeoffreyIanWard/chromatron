@@ -145,6 +145,7 @@ fn assert_invariants(reports: &[LifecycleReport], settings: LifecycleSettings) {
 /// A camera standing still gets its neighbourhood Active — gradually, within
 /// budget, and never past the cap. Then walking away demotes it the same way.
 #[test]
+#[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
 fn a_neighbourhood_activates_then_demotes_within_budget() {
     let settings = test_settings();
     let mut lifecycle = ChunkLifecycle::start(SEED, cheapest(), settings, None);
@@ -215,6 +216,7 @@ fn a_neighbourhood_activates_then_demotes_within_budget() {
 /// record count, so measure 256 and extrapolate — against the 0.2 GB the
 /// memory budget allocates to resident chunk aggregates.
 #[test]
+#[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
 fn ten_thousand_dormant_chunks_fit_the_budget() {
     let mut lifecycle = ChunkLifecycle::start(SEED, cheapest(), test_settings(), None);
 
@@ -267,6 +269,7 @@ fn ten_thousand_dormant_chunks_fit_the_budget() {
 /// overwhelming majority of ticks once the machine has warmed up, budgets hold
 /// on every tick, and the update call itself stays inside a frame budget.
 #[test]
+#[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
 fn a_200_ms_traversal_keeps_ground_under_the_camera() {
     let cache = scratch_cache("traversal");
     let settings = cheapest();

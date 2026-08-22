@@ -265,6 +265,7 @@ mod tests {
 
     /// A requested block arrives, off-thread, and is the right block.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn a_wanted_block_arrives() {
         let pool = GenerationPool::start(SEED, cheapest(), None);
         pool.set_wanted(vec![BlockCoord::new(0, 0)]);
@@ -282,6 +283,7 @@ mod tests {
 
     /// Priority order is delivery order for a queued list.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn blocks_arrive_in_priority_order() {
         let pool = GenerationPool::start(SEED, cheapest(), None);
         pool.set_wanted(vec![
@@ -309,6 +311,7 @@ mod tests {
     /// guards is real: the frontier resends its list every frame, far faster
     /// than the caller polls completions.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn resending_the_list_does_not_duplicate_work() {
         let pool = GenerationPool::start(SEED, cheapest(), None);
 
@@ -337,6 +340,7 @@ mod tests {
 
     /// `forget` re-opens a block for generation — the dropped-from-memory case.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn a_forgotten_block_can_be_wanted_again() {
         let pool = GenerationPool::start(SEED, cheapest(), None);
         pool.set_wanted(vec![BlockCoord::new(5, 5)]);
@@ -359,6 +363,7 @@ mod tests {
 
     /// The pool serves from the cache when one is attached.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn a_cached_block_is_served_from_disk() {
         let root = std::env::temp_dir()
             .join("cx-worldgen-pool-tests")

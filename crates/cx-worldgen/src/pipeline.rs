@@ -310,6 +310,7 @@ mod tests {
     /// pipeline reading outside its arguments — so a small case tests the same
     /// thing and the large one confirms it at the size the criterion states.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn a_block_generates_the_same_whatever_ran_before_it() {
         let settings = fast();
 
@@ -340,6 +341,7 @@ mod tests {
     /// Without this, the test above would pass against a generator that returned
     /// the same terrain everywhere.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn neighbouring_blocks_are_not_copies_of_each_other() {
         let settings = fast();
         let a = hash(&generate_block(SEED, BlockCoord::new(0, 0), settings));
@@ -352,6 +354,7 @@ mod tests {
 
     /// A different seed is a different world.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn the_seed_changes_the_world() {
         let settings = fast();
         let block = BlockCoord::new(2, 2);
@@ -366,6 +369,7 @@ mod tests {
     /// Every stage still runs — a world without erosion still needs drainage —
     /// so this checks the stages are no-ops rather than an untaken branch.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn the_no_erosion_profile_produces_a_valid_world() {
         let block = generate_block(SEED, BlockCoord::new(1, 1), WorldSettings::NO_EROSION);
 
@@ -396,6 +400,7 @@ mod tests {
     /// second fill to recover something that had just been computed and thrown
     /// away.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn standing_water_is_recoverable_from_the_two_surfaces() {
         let block = generate_block(SEED, BlockCoord::new(0, 0), fast());
 
