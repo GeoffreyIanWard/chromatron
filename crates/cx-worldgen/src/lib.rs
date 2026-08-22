@@ -57,7 +57,7 @@ pub use cache::BlockCache;
 pub use carve::{CarveReport, CarveSettings, carve};
 pub use derive::{ASPECT_FLAT, DerivedFields, derive_fields};
 pub use elevation::{ElevationGenerator, TerrainShape};
-pub use flow::{BoundarySeal, FlowNetwork, NO_FLOW};
+pub use flow::{BlockBoundary, FlowNetwork, NO_FLOW};
 pub use frontier::{FrontierSettings, wanted_blocks};
 pub use hardness::{HardnessMap, HardnessSettings};
 pub use hydraulic::{ErosionReport, ErosionSettings, erode};
