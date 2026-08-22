@@ -160,7 +160,12 @@ pub struct Carved {
 /// carving moves channels by metres, so every later stage that asks where the
 /// water is would otherwise be reading the drainage of a surface that no longer
 /// exists.
-pub fn carve(surface: BlockGrid, network: &FlowNetwork, settings: CarveSettings) -> Carved {
+pub fn carve(
+    surface: BlockGrid,
+    network: &FlowNetwork,
+    settings: CarveSettings,
+    seal: &crate::flow::BoundarySeal,
+) -> Carved {
     let cell_size = cx_core::math::EROSION_CELL_SIZE;
     let cell_area = cell_size * cell_size;
 
@@ -273,7 +278,7 @@ pub fn carve(surface: BlockGrid, network: &FlowNetwork, settings: CarveSettings)
     // from the fill is the ground plus whatever standing water sits on it.
     let ground = surface.clone();
 
-    let rebuilt = FlowNetwork::build(surface);
+    let rebuilt = FlowNetwork::build_sealed(surface, seal);
     let report = CarveReport {
         channel_cells,
         carved_cells,
@@ -320,7 +325,12 @@ mod tests {
     fn carved(settings: CarveSettings) -> (BlockGrid, BlockGrid, CarveReport) {
         let before = FlowNetwork::build(valley());
         let baseline = before.filled().clone();
-        let carved = carve(baseline.clone(), &before, settings);
+        let carved = carve(
+            baseline.clone(),
+            &before,
+            settings,
+            &crate::flow::BoundarySeal::open(),
+        );
         (baseline, carved.drained, carved.report)
     }
 

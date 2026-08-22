@@ -31,6 +31,11 @@ fn main() {
     let generator = ElevationGenerator::with_world(seed, settings.terrain, settings.world);
 
     let stage = Instant::now();
+    let region = cx_worldgen::RegionalWater::for_block(&generator, coordinates, settings.region);
+    let seal = region.boundary_seal(coordinates);
+    println!("regional model      {:>8.2?}", stage.elapsed());
+
+    let stage = Instant::now();
     let elevation = BlockGrid::base_elevation(&generator, coordinates);
     println!("base elevation      {:>8.2?}", stage.elapsed());
 
@@ -66,7 +71,7 @@ fn main() {
 
     let stage = Instant::now();
     let (eroded, network, erosion) =
-        cx_worldgen::erode(elevation, seed, coordinates, settings.erosion);
+        cx_worldgen::erode(elevation, seed, coordinates, settings.erosion, &seal);
     println!(
         "erode (fill+route+{} rounds) {:>8.2?}",
         erosion.rounds,
@@ -82,7 +87,7 @@ fn main() {
     );
 
     let stage = Instant::now();
-    let carved = cx_worldgen::carve(relaxed, &network, settings.carve);
+    let carved = cx_worldgen::carve(relaxed, &network, settings.carve, &seal);
     println!("carve               {:>8.2?}", stage.elapsed());
 
     println!("total               {:>8.2?}", started.elapsed());
@@ -101,7 +106,7 @@ fn main() {
     // block under 5 ms, and the full-resolution bake under 200 ms. Measured
     // on the block just generated, over a handful of chunks so one lucky
     // cache line does not write the milestone numbers.
-    let network = cx_worldgen::FlowNetwork::build(carved.drained.clone());
+    let network = cx_worldgen::FlowNetwork::build_sealed(carved.drained.clone(), &seal);
     let block = cx_worldgen::GeneratedBlock {
         coordinates,
         terrain: carved.drained,

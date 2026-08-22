@@ -151,15 +151,21 @@ impl BlockCache {
 
         // The rest of a generated block is derived, not stored: the terrain is
         // the ground with basins filled, the network is routed from it, and the
-        // generator rebuilds from the seed. Same code path carving used, so
-        // the results are bit-identical — and `tests` proves that rather than
-        // trusting this comment.
-        let network = FlowNetwork::build(ground.clone());
+        // generator rebuilds from the seed. Same code path carving used —
+        // including the same regional boundary seal, or a loaded block's
+        // basins would fill to different levels than the generated one's —
+        // and `tests` proves the bit-identity rather than trusting this
+        // comment.
         let generator = crate::elevation::ElevationGenerator::with_world(
             seed,
             settings.terrain,
             settings.world,
         );
+        let coordinates = crate::block::BlockCoordinates::new(block);
+        let region =
+            crate::region::RegionalWater::for_block(&generator, coordinates, settings.region);
+        let seal = region.boundary_seal(coordinates);
+        let network = FlowNetwork::build_sealed(ground.clone(), &seal);
 
         Some(GeneratedBlock {
             coordinates: crate::block::BlockCoordinates::new(block),

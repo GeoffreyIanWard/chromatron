@@ -399,13 +399,16 @@ fn flow_is_continuous_over_100_km_of_channel_across_the_seam() {
     // the *typical* crossing climbs, the seam is broken everywhere rather
     // than at known trouble spots.
     uphill_steps.sort_by(f32::total_cmp);
-    // Reported, not asserted — and that is a finding, not a kindness. The
-    // median crossing on this seed climbs ~13 m: channels seek low ground,
-    // trans-seam low ground is exactly where basin-fill divergence lives, so
-    // the criterion's own channels sample the defect preferentially. The
-    // milestone records the surface-quality half of the criterion as NOT met,
-    // with the fix (worldmap-informed fill levels); this walk keeps the
-    // numbers visible on every gate run so the fix has a before and after.
+    // The typical crossing must be clean now that pour levels are shared;
+    // a creeping median would mean the regional model and the fine pipeline
+    // are drifting apart.
+    if let Some(median) = uphill_steps.get(uphill_steps.len() / 2) {
+        assert!(
+            *median <= 2.0,
+            "the median seam crossing climbs {median:.2} m — the regional \
+             floor is no longer holding pour levels together"
+        );
+    }
     println!(
         "seam uphill steps over {} crossings: median {:.2} m, worst {worst_uphill_at_seam:.2} m",
         uphill_steps.len(),
