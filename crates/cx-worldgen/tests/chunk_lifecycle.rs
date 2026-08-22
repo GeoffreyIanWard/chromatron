@@ -63,6 +63,14 @@ fn test_settings() -> LifecycleSettings {
             radius_blocks: 1,
             max_blocks: 4,
         },
+        // The shipped default is one promotion a tick — a *frame budget*
+        // decision: a promotion bakes ~7 ms on the calling thread, and the
+        // windowed app charges that to a 20 ms frame. These tests are
+        // headless; there is no frame to protect, and on a slow CI runner
+        // one-a-tick left the 200 m/s traversal 3% short of its coverage
+        // bound. Two is what the machinery sustains when nothing else needs
+        // the thread.
+        promotions_per_tick: 2,
         ..LifecycleSettings::DEFAULT
     }
 }
