@@ -41,7 +41,13 @@ pub struct FrontierSettings {
 impl FrontierSettings {
     /// Defaults sized for ~44 s generation and current travel speeds.
     pub const DEFAULT: Self = Self {
-        lead_seconds: 50.0,
+        // 100 s of lead, not 50: a block takes ~24 s to make and the pool is
+        // single-worker, so a request can wait a full block behind the one in
+        // flight. Fifty seconds of lead lost that race exactly once per entry
+        // into cold terrain at 200 m/s — measured, one ~25 s hole in the
+        // ground per transition; a hundred covers request latency plus a
+        // queued block with margin to spare.
+        lead_seconds: 100.0,
         radius_blocks: 1,
         max_blocks: 24,
     };
@@ -95,15 +101,42 @@ pub fn wanted_blocks(
         candidates.push(block_containing(x, z));
     }
 
-    // Distance from the look-ahead point decides priority; the coordinate
-    // tie-break makes equal distances deterministic.
+    // Priority follows the *path*, not the destination. Sorting by distance
+    // to the look-ahead point built the far end of the journey first — at
+    // 200 m/s with a 100 s lead the pool was generating terrain twenty
+    // kilometres ahead while the camera flew off the edge of the ground in
+    // front of it, measured as a hole under the camera every frame. So:
+    // nearest the travel segment first (the line from the camera to the
+    // look-ahead point), and along equal offsets, nearest the *camera* —
+    // build the road, in driving order, before any of the scenery. Standing
+    // still the segment is a point and this is exactly the old
+    // nearest-the-camera order. Coordinates break ties so equal distances
+    // order the same way every call (`ADR-0004` — the pool must see the same
+    // priorities on every machine).
     let key = |block: &BlockCoord| {
         let centre_x = (block.x as f32 + 0.5) * BLOCK_SIZE;
         let centre_z = (block.z as f32 + 0.5) * BLOCK_SIZE;
-        let dx = centre_x - ahead.0;
-        let dz = centre_z - ahead.1;
-        // Squared distance as ordered bits: exact, no float comparison quirks.
-        (f64::from(dx * dx + dz * dz).to_bits(), block.x, block.z)
+
+        let seg_x = ahead.0 - position.0;
+        let seg_z = ahead.1 - position.1;
+        let to_x = centre_x - position.0;
+        let to_z = centre_z - position.1;
+        let length_squared = seg_x * seg_x + seg_z * seg_z;
+        let t = if length_squared > 0.0 {
+            ((to_x * seg_x + to_z * seg_z) / length_squared).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let off_x = to_x - seg_x * t;
+        let off_z = to_z - seg_z * t;
+
+        // Squared distances as ordered bits: exact, no float comparison quirks.
+        (
+            f64::from(off_x * off_x + off_z * off_z).to_bits(),
+            f64::from(to_x * to_x + to_z * to_z).to_bits(),
+            block.x,
+            block.z,
+        )
     };
 
     candidates.sort_by_key(key);
@@ -191,6 +224,36 @@ mod tests {
                 "block ({x}, 0) on the travel line is not wanted"
             );
         }
+    }
+
+    #[test]
+    fn the_road_is_built_in_driving_order_before_the_scenery() {
+        let mid = cx_core::math::BLOCK_SIZE / 2.0;
+        // Look-ahead ~4 blocks east. The pool has one worker; if the
+        // destination outranks the block directly ahead, the camera flies off
+        // the edge of the generated world while its far future gets built —
+        // which is exactly what the first ordering did, measured as a hole
+        // under the camera every frame of a cold 200 m/s run.
+        let speed = cx_core::math::BLOCK_SIZE * 4.0 / SETTINGS.lead_seconds;
+        let wanted = wanted_blocks((mid, mid), (speed, 0.0), SETTINGS);
+
+        let rank = |x: i32, z: i32| {
+            wanted
+                .iter()
+                .position(|b| *b == BlockCoord::new(x, z))
+                .unwrap_or(usize::MAX)
+        };
+        for x in 0..3 {
+            assert!(
+                rank(x, 0) < rank(x + 1, 0),
+                "line block ({x}, 0) should be built before ({}, 0)",
+                x + 1
+            );
+        }
+        assert!(
+            rank(1, 0) < rank(4, 1),
+            "the next block on the road must outrank the destination's scenery"
+        );
     }
 
     #[test]

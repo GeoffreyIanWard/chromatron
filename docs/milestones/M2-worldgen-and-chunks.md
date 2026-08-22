@@ -27,10 +27,10 @@ An effectively infinite world, deterministically generated from a seed, eroded o
 |---|---|
 | 4×4 block area generated in two different orders | identical field hashes — **met**: 48 block generations in 885 s, all 16 identical across orders and all 16 distinct from each other. Gated in CI. |
 | Single block generation (full pipeline; erosion at 5,120² per `ADR-0015`, bake at 16,384²) | < 20 s, 8 background threads — **close**: 45 s → 24 s on the 12-core dev machine (layer-parallel solve, weight-free topology passes, re-route every 2nd round). The remaining gap is the drainage rebuilds; see the closeout notes. |
-| Chunk extraction from cached block | < 5 ms |
-| Terrain mesh bake, one chunk | < 200 ms offline |
-| Flow continuity walk over 100 km of channel | unbroken across chunk *and* block seams |
-| Camera traversal at 200 m/s | frontier never outrun, no frame > 20 ms |
+| Chunk extraction from cached block | < 5 ms — **met**: worst measured bake 2.3 ms (`--example genprofile`). |
+| Terrain mesh bake, one chunk | < 200 ms offline — **met**: 2.3 ms bake + 1.5 ms derived fields + 2.9 ms water, worst of four chunks. |
+| Flow continuity walk over 100 km of channel | unbroken across chunk *and* block seams — **split verdict**, gated in CI: 218 km walked, channels continue across every crossing (flowlines verified on the receiving side). The seam *surface*, however, steps uphill at typical crossings — median ~13 m, worst ~94 m on the gate's seed — because a basin spanning the seam fills to a different pour level in each block's context. See the seam notes below. |
+| Camera traversal at 200 m/s | frontier never outrun, no frame > 20 ms — **split verdict**, measured in-app (`CX_AUTOFLY=200`): over cached terrain, never outrun (zero underfoot misses across 32 km) with steady-state worst frames of ~17–24 ms — a shade over target, the remainder being chunk promotion baking on the frame thread. Over *cold* terrain, not met and not meetable yet: in-app generation is ~45 s a block against 41 s to fly across one, so this criterion is coupled to the sub-20 s block target. Two real fixes fell out of measuring: promotion budgets sized to the frame (one bake a tick), and frontier priorities that build the travel path in driving order rather than the destination first — the old ordering left a hole under the camera every frame of a cold run. |
 | Delete block cache, replay | identical world state — **met**, bit-equality test in `cx_worldgen::cache` |
 | 10,000 generated chunks resident as `Dormant` | within memory budget — **met**, counted in bytes (~3 MB vs 200) |
 | `no-erosion` profile | generates a valid world; differs from `full-sim` only in terrain shape |
@@ -169,6 +169,21 @@ affordable to have both.
   texture smooths (capture happens half as often), and the two stills were compared side
   by side before the default changed. Every-round re-routing remains one setting away.
   `--example genprofile` is the stopwatch these numbers come from.
+
+- **The seam question, answered by walking it** — a gate test walks every channel-scale
+  cell of two adjacent full-pipeline blocks downstream, handing over core-to-core at the
+  seam (halo cells are never consulted: nobody renders them). Findings, in order of
+  discovery: (1) **channels continue** — every crossing lands on a real flowline within a
+  few cells, never an uncarved hillside; (2) **discharge does not** — accumulation restarts
+  at each block's grid edge, so a river's catchment is under-stated just downstream of
+  every seam, under-charging carve width there; (3) **basins are the seam's real defect** —
+  a basin spanning the seam is filled to a different pour level by each block (each sees a
+  different saddle beyond the other's halo), and erosion sculpts the diverged surfaces into
+  steps of tens of metres exactly where channels cross. The walk reports median and worst
+  uphill steps on every gate run, so the fix has a before and after. The fix for (2) and
+  (3) is the same instrument: **worldmap-supplied boundary conditions** — regional pour
+  elevations to pin trans-seam fill levels, and boundary influx to seed accumulation.
+  S07-level design work, deliberately not smuggled into a test PR.
 
 ## Notes
 
