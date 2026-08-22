@@ -31,8 +31,8 @@ fn main() {
     let generator = ElevationGenerator::with_world(seed, settings.terrain, settings.world);
 
     let stage = Instant::now();
-    let region = cx_worldgen::RegionalWater::for_block(&generator, coordinates, settings.region);
-    let seal = region.boundary_seal(coordinates);
+    let seal =
+        cx_worldgen::RegionalWater::boundary_for_block(&generator, coordinates, settings.region);
     println!("regional model      {:>8.2?}", stage.elapsed());
 
     let stage = Instant::now();
@@ -48,7 +48,10 @@ fn main() {
     println!("  one full network build    {:>8.2?}", stage.elapsed());
     drop(full);
     let stage = Instant::now();
-    let pitfree = cx_worldgen::FlowNetwork::build_pit_free(elevation.clone());
+    let pitfree = cx_worldgen::FlowNetwork::build_pit_free(
+        elevation.clone(),
+        &cx_worldgen::BlockBoundary::open(),
+    );
     println!("  one pit-free rebuild      {:>8.2?}", stage.elapsed());
 
     // One full pass of receiver iteration — the share math every stage leans

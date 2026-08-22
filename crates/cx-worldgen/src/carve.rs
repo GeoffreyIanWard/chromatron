@@ -164,7 +164,7 @@ pub fn carve(
     surface: BlockGrid,
     network: &FlowNetwork,
     settings: CarveSettings,
-    seal: &crate::flow::BoundarySeal,
+    seal: &crate::flow::BlockBoundary,
 ) -> Carved {
     let cell_size = cx_core::math::EROSION_CELL_SIZE;
     let cell_area = cell_size * cell_size;
@@ -329,7 +329,7 @@ mod tests {
             baseline.clone(),
             &before,
             settings,
-            &crate::flow::BoundarySeal::open(),
+            &crate::flow::BlockBoundary::open(),
         );
         (baseline, carved.drained, carved.report)
     }

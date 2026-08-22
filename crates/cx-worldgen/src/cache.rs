@@ -162,9 +162,11 @@ impl BlockCache {
             settings.world,
         );
         let coordinates = crate::block::BlockCoordinates::new(block);
-        let region =
-            crate::region::RegionalWater::for_block(&generator, coordinates, settings.region);
-        let seal = region.boundary_seal(coordinates);
+        let seal = crate::region::RegionalWater::boundary_for_block(
+            &generator,
+            coordinates,
+            settings.region,
+        );
         let network = FlowNetwork::build_sealed(ground.clone(), &seal);
 
         Some(GeneratedBlock {

@@ -133,16 +133,17 @@ impl FlowNetwork {
     /// has no further use, and holding both would double the largest allocation
     /// in the pipeline for no purpose.
     pub fn build(elevation: BlockGrid) -> Self {
-        Self::build_sealed(elevation, &BoundarySeal::open())
+        Self::build_sealed(elevation, &BlockBoundary::open())
     }
 
     /// [`FlowNetwork::build`], with the grid boundary sealed to a regional
     /// floor so trans-seam basins fill to a shared level (`crate::region`).
-    pub fn build_sealed(elevation: BlockGrid, seal: &BoundarySeal) -> Self {
-        let filled = fill_depressions(elevation, seal);
+    pub fn build_sealed(elevation: BlockGrid, boundary: &BlockBoundary) -> Self {
+        let filled = fill_depressions(elevation, boundary);
         let across_flats = resolve_flats(&filled);
         let direction = flow_directions(&filled, &across_flats);
-        let (accumulation, order, layer_starts) = accumulate(&filled, &direction);
+        let (mut accumulation, order, layer_starts) = accumulate(&filled, &direction);
+        charge_influx(&mut accumulation, &direction, boundary);
 
         Self {
             filled,
@@ -167,10 +168,11 @@ impl FlowNetwork {
     ///
     /// The caller owns the claim that the surface is pit-free. Erosion rounds
     /// qualify; anything else should use [`FlowNetwork::build`].
-    pub fn build_pit_free(surface: BlockGrid) -> Self {
+    pub fn build_pit_free(surface: BlockGrid, boundary: &BlockBoundary) -> Self {
         let across_flats = resolve_flats(&surface);
         let direction = flow_directions(&surface, &across_flats);
-        let (accumulation, order, layer_starts) = accumulate(&surface, &direction);
+        let (mut accumulation, order, layer_starts) = accumulate(&surface, &direction);
+        charge_influx(&mut accumulation, &direction, boundary);
 
         Self {
             filled: surface,
@@ -316,16 +318,21 @@ impl FlowNetwork {
 /// drains. Accumulation built on it silently stopped collecting inside every
 /// lake — the largest channel fell from 31% of the block to 1%. [`accumulate`]
 /// derives its own order now.
-/// The regional floor under a grid's boundary (`crate::region`).
+/// What the region tells a block about its edges (`crate::region`).
 ///
-/// One value per boundary cell on each side, in metres. The fill raises a
-/// boundary cell to its floor before seeding, so the flood cannot leave the
-/// grid below the level the *region* says water stands at that position —
-/// which is what makes two blocks fill a shared basin to the same height.
-/// [`BoundarySeal::open`] is negative infinity everywhere: the historical
-/// open boundary, bit-for-bit.
+/// Two channels, one value per boundary cell per side. **Floors**, metres:
+/// the fill raises a boundary cell to its floor before seeding, so the flood
+/// cannot leave the grid below the level the *region* says water stands at
+/// that position — which is what makes two blocks fill a shared basin to the
+/// same height. **Influx**, square metres of catchment: drainage the region
+/// says flows *into* the grid at that cell, seeded into the accumulation so
+/// a river does not restart from nothing at every block edge — the defect
+/// that thinned every channel just past a seam and under-charged its carve.
+///
+/// [`BlockBoundary::open`] is the historical open boundary, bit-for-bit:
+/// floors at negative infinity, influx at zero.
 #[derive(Debug, Clone)]
-pub struct BoundarySeal {
+pub struct BlockBoundary {
     /// Floors along `z = 0`.
     pub north: Vec<f32>,
     /// Floors along `z = EDGE - 1`.
@@ -334,22 +341,35 @@ pub struct BoundarySeal {
     pub west: Vec<f32>,
     /// Floors along `x = EDGE - 1`.
     pub east: Vec<f32>,
+    /// Incoming catchment along `z = 0`, m².
+    pub influx_north: Vec<f32>,
+    /// Incoming catchment along `z = EDGE - 1`, m².
+    pub influx_south: Vec<f32>,
+    /// Incoming catchment along `x = 0`, m².
+    pub influx_west: Vec<f32>,
+    /// Incoming catchment along `x = EDGE - 1`, m².
+    pub influx_east: Vec<f32>,
 }
 
-impl BoundarySeal {
-    /// No seal: every boundary cell keeps its own height.
+impl BlockBoundary {
+    /// No boundary conditions: open edges, dry edges.
     pub fn open() -> Self {
-        let side = || vec![f32::NEG_INFINITY; EDGE as usize];
+        let floors = || vec![f32::NEG_INFINITY; EDGE as usize];
+        let dry = || vec![0.0f32; EDGE as usize];
         Self {
-            north: side(),
-            south: side(),
-            west: side(),
-            east: side(),
+            north: floors(),
+            south: floors(),
+            west: floors(),
+            east: floors(),
+            influx_north: dry(),
+            influx_south: dry(),
+            influx_west: dry(),
+            influx_east: dry(),
         }
     }
 }
 
-fn fill_depressions(mut elevation: BlockGrid, seal: &BoundarySeal) -> BlockGrid {
+fn fill_depressions(mut elevation: BlockGrid, seal: &BlockBoundary) -> BlockGrid {
     let mut heap: BinaryHeap<Reverse<(u32, u32)>> = BinaryHeap::new();
     let mut done = vec![false; CELLS];
 
@@ -948,6 +968,81 @@ fn accumulate(filled: &BlockGrid, direction: &[FlowDir]) -> (Vec<f32>, Vec<u32>,
     starts.push(order.len());
 
     (accumulation, order, starts)
+}
+
+/// Charges the region's boundary influx into an already-computed
+/// accumulation, down the channel that carries it.
+///
+/// Placement by height alone put a master river's discharge into whichever
+/// boundary cell happened to sit lowest — once, a lake shore two hundred
+/// cells from the river. The river's own accumulation is the honest signpost:
+/// each deposit snaps to the **highest-accumulation** boundary cell within a
+/// reach that scales with the deposit (a big river's entry position is known
+/// less precisely than a creek's), then the whole amount is added along the
+/// D8 spine downstream to the outlet — the path carve, water, and the A^m
+/// term all read. Multi-receiver spreading is deliberately ignored: the
+/// spine is the channel, and charging hillside side-shares from a seam
+/// entry would smear a river across its own banks.
+///
+/// Fixed processing order (sides, then index) and a bounded walk keep it
+/// deterministic on any machine. Zero influx charges nothing: an open
+/// boundary is the historical behaviour bit-for-bit.
+fn charge_influx(accumulation: &mut [f32], direction: &[FlowDir], boundary: &BlockBoundary) {
+    let cell_area = EROSION_CELL_SIZE * EROSION_CELL_SIZE;
+
+    let mut charge = |x: u32, z: u32, area: f32, along_x: bool| {
+        if area <= 0.0 {
+            return;
+        }
+        let drift = (area.sqrt() / (8.0 * EROSION_CELL_SIZE)) as u32;
+        let reach = (8 + drift).min(256);
+        let centre = if along_x { x } else { z };
+        let (mut best_cell, mut best_flow) = (None, -1.0f32);
+        for offset in centre.saturating_sub(reach)..=(centre + reach).min(EDGE - 1) {
+            let candidate = if along_x {
+                ErosionCell::new(offset, z)
+            } else {
+                ErosionCell::new(x, offset)
+            };
+            let Some(candidate) = candidate else { continue };
+            let flow = accumulation.get(flat(candidate)).copied().unwrap_or(0.0);
+            // Strict greater-than: ties keep the first (lowest index) — a
+            // fixed rule, so the same field charges the same cell anywhere.
+            if flow > best_flow {
+                best_flow = flow;
+                best_cell = Some(candidate);
+            }
+        }
+
+        let added = area / cell_area;
+        let mut cell = best_cell;
+        // Bounded far past any real path, so a routing cycle (which the
+        // acyclic field cannot produce) would end the walk rather than hang.
+        for _ in 0..(EDGE as usize * 8) {
+            let Some(at) = cell else { break };
+            if let Some(slot) = accumulation.get_mut(flat(at)) {
+                *slot += added;
+            }
+            cell = step(at, direction.get(flat(at)).copied().unwrap_or(NO_FLOW));
+        }
+    };
+
+    for x in 0..EDGE {
+        if let Some(area) = boundary.influx_north.get(x as usize) {
+            charge(x, 0, *area, true);
+        }
+        if let Some(area) = boundary.influx_south.get(x as usize) {
+            charge(x, EDGE - 1, *area, true);
+        }
+    }
+    for z in 0..EDGE {
+        if let Some(area) = boundary.influx_west.get(z as usize) {
+            charge(0, z, *area, false);
+        }
+        if let Some(area) = boundary.influx_east.get(z as usize) {
+            charge(EDGE - 1, z, *area, false);
+        }
+    }
 }
 
 /// Calls `visit` once per downslope neighbour with its share of the flow.

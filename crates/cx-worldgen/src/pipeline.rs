@@ -54,7 +54,7 @@ use crate::worldmap::WorldMapSettings;
 /// cache-vs-regenerate equivalence test in `cache.rs` is the backstop — it
 /// fails on the first machine with a stale cache directory... which a test
 /// tempdir never is, so treat the bump as part of any terrain-changing PR.
-pub const GENERATOR_VERSION: u32 = 3;
+pub const GENERATOR_VERSION: u32 = 4;
 
 impl WorldSettings {
     /// A stable digest of every knob that shapes terrain.
@@ -227,8 +227,8 @@ pub fn generate_block(seed: u64, block: BlockCoord, settings: WorldSettings) -> 
     // block seams, computed from the same positional source both neighbours
     // read (`crate::region`). The seal it produces guards every depression
     // fill below.
-    let region = crate::region::RegionalWater::for_block(&generator, coordinates, settings.region);
-    let seal = region.boundary_seal(coordinates);
+    let seal =
+        crate::region::RegionalWater::boundary_for_block(&generator, coordinates, settings.region);
 
     // 1. Base elevation on the continental surface.
     let elevation = BlockGrid::base_elevation(&generator, coordinates);

@@ -35,7 +35,7 @@ use cx_core::math::{BLOCK_SIZE, EROSION_CELL_SIZE};
 
 use crate::block::BlockCoordinates;
 use crate::elevation::ElevationGenerator;
-use crate::flow::BoundarySeal;
+use crate::flow::BlockBoundary;
 
 /// How the regional model is sized. Every number is a knob on purpose.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -117,18 +117,88 @@ pub struct RegionalWater {
     margin: f32,
     /// Coarse filled heights, row-major with +X fastest.
     filled: Vec<f32>,
+    /// Each coarse cell's D8 receiver on the final surface, `u32::MAX` none.
+    receiver: Vec<u32>,
+    /// Accumulated catchment per coarse cell, square metres.
+    area: Vec<f32>,
+}
+
+/// A block edge, for edge-canonical windows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    /// `z = 0`.
+    North,
+    /// `z = EDGE - 1`.
+    South,
+    /// `x = 0`.
+    West,
+    /// `x = EDGE - 1`.
+    East,
 }
 
 impl RegionalWater {
-    /// Builds the model for `block` and its neighbourhood.
+    /// Builds the model for the window **canonical to one edge** of a block.
+    ///
+    /// Centred on the edge's midpoint — a point the two blocks sharing that
+    /// edge agree on exactly — so both construct byte-identical models for
+    /// it. This is what restores cross-block agreement now that the coarse
+    /// drainage is window-dependent: flat routing and accumulation see the
+    /// whole window, so *which* window must be a property of the seam, not
+    /// of whichever block asked.
+    pub(crate) fn for_edge(
+        generator: &ElevationGenerator,
+        block: BlockCoordinates,
+        side: Side,
+        settings: RegionSettings,
+    ) -> Self {
+        let origin = block.block();
+        let (mid_x, mid_z) = match side {
+            Side::North => (
+                (origin.x as f32 + 0.5) * BLOCK_SIZE,
+                origin.z as f32 * BLOCK_SIZE,
+            ),
+            Side::South => (
+                (origin.x as f32 + 0.5) * BLOCK_SIZE,
+                (origin.z as f32 + 1.0) * BLOCK_SIZE,
+            ),
+            Side::West => (
+                origin.x as f32 * BLOCK_SIZE,
+                (origin.z as f32 + 0.5) * BLOCK_SIZE,
+            ),
+            Side::East => (
+                (origin.x as f32 + 1.0) * BLOCK_SIZE,
+                (origin.z as f32 + 0.5) * BLOCK_SIZE,
+            ),
+        };
+        Self::around(generator, mid_x, mid_z, settings)
+    }
+
+    /// Builds the model for `block` and its neighbourhood, centred on the
+    /// block. Kept for uses that want one window per block (tests, tooling);
+    /// boundary conditions use [`RegionalWater::for_edge`] instead.
     ///
     /// The lattice is aligned to the **world**, not to the block: cell `i`
     /// covers world x in `[i·cell, (i+1)·cell)` for a global integer `i`.
-    /// Two adjacent blocks therefore sample byte-identical heights at every
-    /// lattice point their regions share, which is the whole trick.
     pub fn for_block(
         generator: &ElevationGenerator,
         block: BlockCoordinates,
+        settings: RegionSettings,
+    ) -> Self {
+        let origin = block.block();
+        Self::around(
+            generator,
+            (origin.x as f32 + 0.5) * BLOCK_SIZE,
+            (origin.z as f32 + 0.5) * BLOCK_SIZE,
+            settings,
+        )
+    }
+
+    /// The window itself: a square of coarse lattice centred near a world
+    /// point, snapped outward to lattice lines.
+    fn around(
+        generator: &ElevationGenerator,
+        centre_x: f32,
+        centre_z: f32,
         settings: RegionSettings,
     ) -> Self {
         if settings.is_none() {
@@ -139,21 +209,20 @@ impl RegionalWater {
                 cell_size: 1.0,
                 margin: 0.0,
                 filled: Vec::new(),
+                receiver: Vec::new(),
+                area: Vec::new(),
             };
         }
         let cell = settings.cell_size.max(1.0);
         let reach = settings.radius_blocks.max(0) as f32 * BLOCK_SIZE;
 
-        // The fine grid spans the block plus its halo; the region spans that
-        // plus the neighbourhood, snapped outward to lattice lines.
-        let (min_x, min_z) = block.cell_centre(0, 0);
-        let halo = EROSION_CELL_SIZE; // centre-to-corner slack
-        let low_x = ((min_x - halo - reach) / cell).floor() as i64;
-        let low_z = ((min_z - halo - reach) / cell).floor() as i64;
-        let span = BLOCK_SIZE
-            + 2.0 * (reach + 2.0 * halo)
-            + crate::block::HALO_CELLS as f32 * EROSION_CELL_SIZE * 2.0;
-        let cells_across = (span / cell).ceil() as usize + 2;
+        // Wide enough that, centred on an edge midpoint, the window covers
+        // both adjacent blocks' haloed grids plus the neighbourhood reach.
+        let halo_span = crate::block::HALO_CELLS as f32 * EROSION_CELL_SIZE;
+        let half = BLOCK_SIZE + reach + halo_span + 2.0 * EROSION_CELL_SIZE;
+        let low_x = ((centre_x - half) / cell).floor() as i64;
+        let low_z = ((centre_z - half) / cell).floor() as i64;
+        let cells_across = ((2.0 * half) / cell).ceil() as usize + 2;
 
         let mut filled = vec![0.0f32; cells_across * cells_across];
         for z in 0..cells_across {
@@ -173,6 +242,10 @@ impl RegionalWater {
         erode_coarse(&mut filled, cells_across, cells_across, cell, settings);
         fill_coarse(&mut filled, cells_across, cells_across);
 
+        // Route the final surface once and keep the drainage: the influx a
+        // block's boundary receives is read straight off it.
+        let (receiver, _, area) = route_coarse(&filled, cells_across, cells_across, cell);
+
         Self {
             start: (low_x, low_z),
             width: cells_across,
@@ -180,6 +253,8 @@ impl RegionalWater {
             cell_size: cell,
             margin: settings.margin,
             filled,
+            receiver,
+            area,
         }
     }
 
@@ -204,30 +279,139 @@ impl RegionalWater {
             - self.margin
     }
 
-    /// The seal for a block's fine-grid boundary: the floor sampled at every
-    /// boundary cell of the (haloed) grid.
-    pub fn boundary_seal(&self, block: BlockCoordinates) -> BoundarySeal {
+    /// A block's boundary conditions: pour floors at every boundary cell,
+    /// and the influx of drainage the region routes into the grid.
+    ///
+    /// Each side's conditions come from the window **canonical to that
+    /// edge** ([`RegionalWater::for_edge`]), so the two blocks sharing a
+    /// seam derive byte-identical floors and influx for it — the property
+    /// every seam guarantee here rests on. Influx is read off the edge
+    /// window's coarse drainage: every coarse cell outside the block's fine
+    /// grid whose receiver lies inside deposits its catchment onto the fine
+    /// boundary cell nearest the entry, restricted to the side the flow
+    /// actually crossed.
+    pub fn boundary_for_block(
+        generator: &ElevationGenerator,
+        block: BlockCoordinates,
+        settings: RegionSettings,
+    ) -> BlockBoundary {
+        let mut boundary = BlockBoundary::open();
+        if settings.is_none() {
+            return boundary;
+        }
+        // Four independent windows, built concurrently; applied in a fixed
+        // order afterwards, so the result is the sequential one exactly.
+        let sides = [Side::North, Side::South, Side::West, Side::East];
+        let models: Vec<(Side, Self)> = std::thread::scope(|scope| {
+            let handles: Vec<_> = sides
+                .into_iter()
+                .map(|side| {
+                    scope.spawn(move || (side, Self::for_edge(generator, block, side, settings)))
+                })
+                .collect();
+            handles
+                .into_iter()
+                .filter_map(|handle| handle.join().ok())
+                .collect()
+        });
+        for (side, model) in &models {
+            model.apply_side(&mut boundary, *side, block);
+        }
+        boundary
+    }
+
+    /// Writes one side's floors and influx into `boundary` from this model.
+    fn apply_side(&self, boundary: &mut BlockBoundary, side: Side, block: BlockCoordinates) {
         let edge = crate::block::EDGE;
-        let mut seal = BoundarySeal::open();
+
+        // Floors along the side.
         for i in 0..edge {
-            let (x0, z0) = block.cell_centre(i, 0);
-            let (x1, z1) = block.cell_centre(i, edge - 1);
-            let (x2, z2) = block.cell_centre(0, i);
-            let (x3, z3) = block.cell_centre(edge - 1, i);
-            if let Some(slot) = seal.north.get_mut(i as usize) {
-                *slot = self.floor_at(x0, z0);
-            }
-            if let Some(slot) = seal.south.get_mut(i as usize) {
-                *slot = self.floor_at(x1, z1);
-            }
-            if let Some(slot) = seal.west.get_mut(i as usize) {
-                *slot = self.floor_at(x2, z2);
-            }
-            if let Some(slot) = seal.east.get_mut(i as usize) {
-                *slot = self.floor_at(x3, z3);
+            let (world_x, world_z) = match side {
+                Side::North => block.cell_centre(i, 0),
+                Side::South => block.cell_centre(i, edge - 1),
+                Side::West => block.cell_centre(0, i),
+                Side::East => block.cell_centre(edge - 1, i),
+            };
+            let floors = match side {
+                Side::North => &mut boundary.north,
+                Side::South => &mut boundary.south,
+                Side::West => &mut boundary.west,
+                Side::East => &mut boundary.east,
+            };
+            if let Some(slot) = floors.get_mut(i as usize) {
+                *slot = self.floor_at(world_x, world_z);
             }
         }
-        seal
+
+        if self.filled.is_empty() {
+            return;
+        }
+
+        // The fine grid's world rectangle, from corner cell centres plus the
+        // half-cell to the true edge.
+        let half = EROSION_CELL_SIZE / 2.0;
+        let (min_cx, min_cz) = block.cell_centre(0, 0);
+        let (max_cx, max_cz) = block.cell_centre(edge - 1, edge - 1);
+        let (min_x, min_z) = (min_cx - half, min_cz - half);
+        let (max_x, max_z) = (max_cx + half, max_cz + half);
+        let inside = |x: f32, z: f32| x >= min_x && x < max_x && z >= min_z && z < max_z;
+        let fine_index = |along: f32, from: f32| -> usize {
+            (((along - from) / EROSION_CELL_SIZE).floor() as i64).clamp(0, edge as i64 - 1) as usize
+        };
+
+        for cz in 0..self.height {
+            for cx in 0..self.width {
+                let at = cz * self.width + cx;
+                let world_x =
+                    (self.start.0 + cx as i64) as f32 * self.cell_size + 0.5 * self.cell_size;
+                let world_z =
+                    (self.start.1 + cz as i64) as f32 * self.cell_size + 0.5 * self.cell_size;
+                if inside(world_x, world_z) {
+                    continue;
+                }
+                let Some(to) = self.receiver.get(at).copied() else {
+                    continue;
+                };
+                if to == u32::MAX {
+                    continue;
+                }
+                let rx = (to as usize) % self.width;
+                let rz = (to as usize) / self.width;
+                let recv_x =
+                    (self.start.0 + rx as i64) as f32 * self.cell_size + 0.5 * self.cell_size;
+                let recv_z =
+                    (self.start.1 + rz as i64) as f32 * self.cell_size + 0.5 * self.cell_size;
+                if !inside(recv_x, recv_z) {
+                    continue;
+                }
+
+                // Which edge the flow crossed — kept only when it is the
+                // side this model is canonical for.
+                let crossed = if world_x < min_x {
+                    Side::West
+                } else if world_x >= max_x {
+                    Side::East
+                } else if world_z < min_z {
+                    Side::North
+                } else {
+                    Side::South
+                };
+                if crossed != side {
+                    continue;
+                }
+
+                let carried = self.area.get(at).copied().unwrap_or(0.0);
+                let slot = match side {
+                    Side::West => boundary.influx_west.get_mut(fine_index(recv_z, min_z)),
+                    Side::East => boundary.influx_east.get_mut(fine_index(recv_z, min_z)),
+                    Side::North => boundary.influx_north.get_mut(fine_index(recv_x, min_x)),
+                    Side::South => boundary.influx_south.get_mut(fine_index(recv_x, min_x)),
+                };
+                if let Some(slot) = slot {
+                    *slot += carried;
+                }
+            }
+        }
     }
 }
 
@@ -318,17 +502,17 @@ fn fill_coarse(heights: &mut [f32], width: usize, height: usize) {
     }
 }
 
-/// Coarse implicit stream-power erosion: fill, route D8, accumulate, solve,
-/// repeated. A miniature of the fine pipeline with none of its refinements —
-/// multi-receiver weighting, hardness, thermal, carving — because the only
-/// thing anyone reads from this surface is where water pours out of basins.
-fn erode_coarse(
-    heights: &mut [f32],
+/// [`route_coarse`] without flat continuation: drainage dies at every flat.
+///
+/// Kept as its own thing because the coarse *erosion* is calibrated against
+/// it — see the comment at its use. Height-sorted order is receiver-first
+/// here precisely because flats have no receivers to mis-order.
+fn route_coarse_truncated(
+    heights: &[f32],
     width: usize,
     height: usize,
     cell_size: f32,
-    settings: RegionSettings,
-) {
+) -> (Vec<u32>, Vec<u32>, Vec<f32>) {
     let index = |x: usize, z: usize| z * width + x;
     let neighbours: [(i64, i64); 8] = [
         (0, -1),
@@ -341,72 +525,226 @@ fn erode_coarse(
         (1, 1),
     ];
 
-    for _ in 0..settings.erosion_rounds {
-        // Fill, so routing terminates at the boundary rather than in pits.
-        fill_coarse(heights, width, height);
-
-        // D8: steepest descent, gradient not drop.
-        let mut receiver: Vec<u32> = vec![u32::MAX; heights.len()];
-        for z in 0..height {
-            for x in 0..width {
-                let here = heights.get(index(x, z)).copied().unwrap_or(0.0);
-                let mut best = 0.0f32;
-                for (dx, dz) in neighbours {
-                    let nx = x as i64 + dx;
-                    let nz = z as i64 + dz;
-                    if nx < 0 || nz < 0 || nx >= width as i64 || nz >= height as i64 {
-                        continue;
-                    }
-                    let next = index(nx as usize, nz as usize);
-                    let drop = here - heights.get(next).copied().unwrap_or(0.0);
-                    if drop <= 0.0 {
-                        continue;
-                    }
-                    let distance = if dx.abs() + dz.abs() == 2 {
-                        cell_size * std::f32::consts::SQRT_2
-                    } else {
-                        cell_size
-                    };
-                    let gradient = drop / distance;
-                    if gradient > best {
-                        best = gradient;
-                        if let Some(slot) = receiver.get_mut(index(x, z)) {
-                            *slot = next as u32;
-                        }
+    let mut receiver: Vec<u32> = vec![u32::MAX; heights.len()];
+    for z in 0..height {
+        for x in 0..width {
+            let here = heights.get(index(x, z)).copied().unwrap_or(0.0);
+            let mut best = 0.0f32;
+            for (dx, dz) in neighbours {
+                let nx = x as i64 + dx;
+                let nz = z as i64 + dz;
+                if nx < 0 || nz < 0 || nx >= width as i64 || nz >= height as i64 {
+                    continue;
+                }
+                let next = index(nx as usize, nz as usize);
+                let drop = here - heights.get(next).copied().unwrap_or(0.0);
+                if drop <= 0.0 {
+                    continue;
+                }
+                let distance = if dx.abs() + dz.abs() == 2 {
+                    cell_size * std::f32::consts::SQRT_2
+                } else {
+                    cell_size
+                };
+                let gradient = drop / distance;
+                if gradient > best {
+                    best = gradient;
+                    if let Some(slot) = receiver.get_mut(index(x, z)) {
+                        *slot = next as u32;
                     }
                 }
             }
         }
+    }
 
-        // Topological order by height, descending: on a filled surface every
-        // receiver is strictly lower or a flat (flats keep MAX receiver =
-        // none and are skipped), so sorting by height gives receivers-first
-        // when walked ascending.
-        let mut order: Vec<u32> = (0..heights.len() as u32).collect();
-        order.sort_by(|a, b| {
-            let ha = heights.get(*a as usize).copied().unwrap_or(0.0);
-            let hb = heights.get(*b as usize).copied().unwrap_or(0.0);
-            ha.total_cmp(&hb).then(a.cmp(b))
-        });
+    let mut order: Vec<u32> = (0..heights.len() as u32).collect();
+    order.sort_by(|a, b| {
+        let ha = heights.get(*a as usize).copied().unwrap_or(0.0);
+        let hb = heights.get(*b as usize).copied().unwrap_or(0.0);
+        ha.total_cmp(&hb).then(a.cmp(b))
+    });
 
-        // Accumulate ascending-from-the-top: walk descending heights adding
-        // each cell's area to its receiver.
-        let cell_area = cell_size * cell_size;
-        let mut area: Vec<f32> = vec![cell_area; heights.len()];
-        for at in order.iter().rev() {
-            let Some(to) = receiver.get(*at as usize).copied() else {
-                continue;
-            };
-            if to == u32::MAX {
-                continue;
-            }
-            let carried = area.get(*at as usize).copied().unwrap_or(0.0);
-            if let Some(slot) = area.get_mut(to as usize) {
-                *slot += carried;
+    let cell_area = cell_size * cell_size;
+    let mut area: Vec<f32> = vec![cell_area; heights.len()];
+    for at in order.iter().rev() {
+        let Some(to) = receiver.get(*at as usize).copied() else {
+            continue;
+        };
+        if to == u32::MAX {
+            continue;
+        }
+        let carried = area.get(*at as usize).copied().unwrap_or(0.0);
+        if let Some(slot) = area.get_mut(to as usize) {
+            *slot += carried;
+        }
+    }
+
+    (receiver, order, area)
+}
+
+/// D8 routing and accumulation over a coarse grid, flats included.
+///
+/// Returns each cell's receiver (`u32::MAX` for none), a source-first
+/// topological order, and the accumulated catchment area in square metres.
+fn route_coarse(
+    heights: &[f32],
+    width: usize,
+    height: usize,
+    cell_size: f32,
+) -> (Vec<u32>, Vec<u32>, Vec<f32>) {
+    let index = |x: usize, z: usize| z * width + x;
+    let neighbours: [(i64, i64); 8] = [
+        (0, -1),
+        (0, 1),
+        (-1, 0),
+        (1, 0),
+        (-1, -1),
+        (1, -1),
+        (-1, 1),
+        (1, 1),
+    ];
+
+    // D8: steepest descent, gradient not drop.
+    let mut receiver: Vec<u32> = vec![u32::MAX; heights.len()];
+    for z in 0..height {
+        for x in 0..width {
+            let here = heights.get(index(x, z)).copied().unwrap_or(0.0);
+            let mut best = 0.0f32;
+            for (dx, dz) in neighbours {
+                let nx = x as i64 + dx;
+                let nz = z as i64 + dz;
+                if nx < 0 || nz < 0 || nx >= width as i64 || nz >= height as i64 {
+                    continue;
+                }
+                let next = index(nx as usize, nz as usize);
+                let drop = here - heights.get(next).copied().unwrap_or(0.0);
+                if drop <= 0.0 {
+                    continue;
+                }
+                let distance = if dx.abs() + dz.abs() == 2 {
+                    cell_size * std::f32::consts::SQRT_2
+                } else {
+                    cell_size
+                };
+                let gradient = drop / distance;
+                if gradient > best {
+                    best = gradient;
+                    if let Some(slot) = receiver.get_mut(index(x, z)) {
+                        *slot = next as u32;
+                    }
+                }
             }
         }
+    }
 
-        // The implicit solve, receivers first (ascending heights).
+    // Route the flats. A filled surface leaves every lake and basin floor
+    // with no downhill neighbour, and a receiver of "none" there truncates
+    // every river at its first flat — measured as coarse rivers two orders
+    // of magnitude smaller than the fine ones they were meant to inform.
+    // The cure is the same as the fine pipeline's `resolve_flats`, in
+    // miniature: breadth-first from each flat's outlets (flat cells that do
+    // have a downhill neighbour), walking across equal-height neighbours and
+    // pointing each newly reached cell back the way the wave came. Fixed
+    // neighbour order and a FIFO queue keep it deterministic.
+    let mut wave: std::collections::VecDeque<u32> = (0..heights.len() as u32)
+        .filter(|at| receiver.get(*at as usize).copied().unwrap_or(u32::MAX) != u32::MAX)
+        .collect();
+    while let Some(at) = wave.pop_front() {
+        let (x, z) = ((at as usize) % width, (at as usize) / width);
+        let here = heights.get(at as usize).copied().unwrap_or(0.0);
+        for (dx, dz) in neighbours {
+            let nx = x as i64 + dx;
+            let nz = z as i64 + dz;
+            if nx < 0 || nz < 0 || nx >= width as i64 || nz >= height as i64 {
+                continue;
+            }
+            let next = index(nx as usize, nz as usize);
+            if receiver.get(next).copied().unwrap_or(0) != u32::MAX {
+                continue;
+            }
+            #[allow(
+                clippy::float_cmp,
+                reason = "a flat is *exactly* equal heights — the fill raises basin cells \
+                          to precisely their pour level, and the wave must walk that \
+                          exact plateau, not a tolerance band around it"
+            )]
+            if heights.get(next).copied().unwrap_or(0.0) != here {
+                continue;
+            }
+            if let Some(slot) = receiver.get_mut(next) {
+                *slot = at;
+            }
+            wave.push_back(next as u32);
+        }
+    }
+
+    // Accumulate by in-degree (Kahn), not by height order: within a flat the
+    // receiver chain runs at one height, and a height sort would happily
+    // drain a cell before its senders had paid in.
+    let mut incoming = vec![0u32; heights.len()];
+    for to in &receiver {
+        if *to != u32::MAX
+            && let Some(slot) = incoming.get_mut(*to as usize)
+        {
+            *slot += 1;
+        }
+    }
+    let cell_area = cell_size * cell_size;
+    let mut area: Vec<f32> = vec![cell_area; heights.len()];
+    let mut order: Vec<u32> = Vec::with_capacity(heights.len());
+    let mut ready: std::collections::VecDeque<u32> = (0..heights.len() as u32)
+        .filter(|at| incoming.get(*at as usize).copied().unwrap_or(1) == 0)
+        .collect();
+    while let Some(at) = ready.pop_front() {
+        order.push(at);
+        let Some(to) = receiver.get(at as usize).copied() else {
+            continue;
+        };
+        if to == u32::MAX {
+            continue;
+        }
+        let carried = area.get(at as usize).copied().unwrap_or(0.0);
+        if let Some(slot) = area.get_mut(to as usize) {
+            *slot += carried;
+        }
+        if let Some(remaining) = incoming.get_mut(to as usize) {
+            *remaining -= 1;
+            if *remaining == 0 {
+                ready.push_back(to);
+            }
+        }
+    }
+
+    (receiver, order, area)
+}
+
+/// Coarse implicit stream-power erosion: fill, route D8, accumulate, solve,
+/// repeated. A miniature of the fine pipeline with none of its refinements —
+/// multi-receiver weighting, hardness, thermal, carving — because the only
+/// thing anyone reads from this surface is where water pours out of basins.
+fn erode_coarse(
+    heights: &mut [f32],
+    width: usize,
+    height: usize,
+    cell_size: f32,
+    settings: RegionSettings,
+) {
+    for _ in 0..settings.erosion_rounds {
+        // Fill, so routing terminates at the boundary rather than in pits.
+        fill_coarse(heights, width, height);
+
+        // Deliberately the *flat-truncated* drainage, not the connected one
+        // route_coarse builds: this accumulation drives the erosion whose
+        // saddles the boundary floors are read from, and it was calibrated —
+        // measured at a 0.00 m median seam step — with rivers restarting at
+        // every flat. Swapping in connected drainage multiplied the A^m term
+        // by orders of magnitude, over-cut the saddles, and brought 90 m
+        // seam steps straight back. Influx wants the connected drainage;
+        // floors want this one; they get one each.
+        let (receiver, order, area) = route_coarse_truncated(heights, width, height, cell_size);
+
+        // The implicit solve, receivers first (ascending heights — the
+        // truncated router's order).
         for at in &order {
             let at = *at as usize;
             let Some(to) = receiver.get(at).copied() else {
@@ -444,34 +782,47 @@ mod tests {
     }
 
     #[test]
-    fn adjacent_blocks_agree_on_the_floor_everywhere_they_overlap() {
-        // The whole point: the floor is a pure function of (seed, position),
-        // so two blocks' regional models must give bit-identical answers at
-        // shared positions — the seam between them above all.
+    fn the_two_blocks_sharing_an_edge_build_the_identical_model_for_it() {
+        // The property every seam guarantee rests on, in its strongest form:
+        // the window is canonical to the *edge*, so the two blocks sharing
+        // it construct byte-identical models — filled surface and drainage
+        // both — and everything derived (floors, influx) agrees for free.
+        // Block-centred windows cannot promise this any more: coarse flat
+        // routing and accumulation are window-dependent, which is exactly
+        // why boundary conditions stopped using them.
         let generator = generator();
-        let west = RegionalWater::for_block(
-            &generator,
-            BlockCoordinates::new(BlockCoord::new(0, 0)),
-            RegionSettings::DEFAULT,
-        );
-        let east = RegionalWater::for_block(
-            &generator,
-            BlockCoordinates::new(BlockCoord::new(1, 0)),
-            RegionSettings::DEFAULT,
-        );
+        let west_block = BlockCoordinates::new(BlockCoord::new(0, 0));
+        let east_block = BlockCoordinates::new(BlockCoord::new(1, 0));
 
-        let seam_x = BLOCK_SIZE;
-        for step in 0..64 {
-            let z = step as f32 * 128.0;
-            for dx in [-900.0f32, -64.0, 0.0, 64.0, 900.0] {
-                assert_eq!(
-                    west.floor_at(seam_x + dx, z),
-                    east.floor_at(seam_x + dx, z),
-                    "the two blocks disagree about the floor at ({}, {z})",
-                    seam_x + dx
-                );
-            }
-        }
+        let from_west =
+            RegionalWater::for_edge(&generator, west_block, Side::East, RegionSettings::DEFAULT);
+        let from_east =
+            RegionalWater::for_edge(&generator, east_block, Side::West, RegionSettings::DEFAULT);
+
+        assert_eq!(from_west.start, from_east.start, "different windows");
+        assert_eq!(
+            from_west.filled, from_east.filled,
+            "the shared edge's filled surface differs between the two blocks"
+        );
+        assert_eq!(
+            from_west.area, from_east.area,
+            "the shared edge's drainage differs between the two blocks"
+        );
+    }
+
+    #[test]
+    fn something_flows_into_a_block_and_both_sides_say_how_much() {
+        // Non-vacuousness for the identity above: the shared edge carries
+        // real drainage, and the assembled boundary sees it.
+        let generator = generator();
+        let east_block = BlockCoordinates::new(BlockCoord::new(1, 0));
+        let boundary =
+            RegionalWater::boundary_for_block(&generator, east_block, RegionSettings::DEFAULT);
+        let entering: f32 = boundary.influx_west.iter().sum();
+        assert!(
+            entering > 0.0,
+            "nothing flows across this seam at all, so edge-model identity proves little"
+        );
     }
 
     #[test]
@@ -504,12 +855,11 @@ mod tests {
     #[test]
     fn the_seal_covers_every_boundary_cell() {
         let generator = generator();
-        let region = RegionalWater::for_block(
+        let seal = RegionalWater::boundary_for_block(
             &generator,
             BlockCoordinates::new(BlockCoord::new(0, 0)),
             RegionSettings::DEFAULT,
         );
-        let seal = region.boundary_seal(BlockCoordinates::new(BlockCoord::new(0, 0)));
 
         for side in [&seal.north, &seal.south, &seal.west, &seal.east] {
             assert_eq!(side.len(), crate::block::EDGE as usize);

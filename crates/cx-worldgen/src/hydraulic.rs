@@ -214,7 +214,7 @@ pub fn erode(
     seed: u64,
     block: crate::block::BlockCoordinates,
     settings: ErosionSettings,
-    seal: &crate::flow::BoundarySeal,
+    seal: &crate::flow::BlockBoundary,
 ) -> (BlockGrid, FlowNetwork, ErosionReport) {
     // Sampled once and reused every round: hardness is a property of the rock,
     // not of the eroding surface, so it never needs recomputing mid-run.
@@ -254,7 +254,7 @@ pub fn erode(
             network = FlowNetwork::build_sealed(eroded, seal);
             surface = network.filled().clone();
         } else if (round + 1).is_multiple_of(cadence) {
-            network = FlowNetwork::build_pit_free(eroded);
+            network = FlowNetwork::build_pit_free(eroded, seal);
             surface = network.filled().clone();
         } else {
             surface = eroded;
@@ -543,7 +543,7 @@ mod tests {
             7,
             at_origin(),
             ErosionSettings::NONE,
-            &crate::flow::BoundarySeal::open(),
+            &crate::flow::BlockBoundary::open(),
         );
 
         assert_eq!(report.rounds, 0);
@@ -574,7 +574,7 @@ mod tests {
             7,
             at_origin(),
             TEST_SETTINGS,
-            &crate::flow::BoundarySeal::open(),
+            &crate::flow::BlockBoundary::open(),
         );
 
         assert!(
@@ -619,7 +619,7 @@ mod tests {
             7,
             at_origin(),
             settings,
-            &crate::flow::BoundarySeal::open(),
+            &crate::flow::BlockBoundary::open(),
         );
 
         assert_eq!(
@@ -674,14 +674,14 @@ mod tests {
             7,
             at_origin(),
             gentle,
-            &crate::flow::BoundarySeal::open(),
+            &crate::flow::BlockBoundary::open(),
         );
         let (_, _, fierce_report) = erode(
             rough_slope(),
             7,
             at_origin(),
             fierce,
-            &crate::flow::BoundarySeal::open(),
+            &crate::flow::BlockBoundary::open(),
         );
 
         assert!(
@@ -710,7 +710,7 @@ mod tests {
             7,
             at_origin(),
             TEST_SETTINGS,
-            &crate::flow::BoundarySeal::open(),
+            &crate::flow::BlockBoundary::open(),
         );
 
         let refilled = FlowNetwork::build(after.clone());
@@ -755,7 +755,7 @@ mod tests {
             7,
             at_origin(),
             settings,
-            &crate::flow::BoundarySeal::open(),
+            &crate::flow::BlockBoundary::open(),
         );
 
         assert!(report.mean_lowering > 0.0, "the cadence erased erosion");
@@ -804,7 +804,7 @@ mod tests {
             7,
             at_origin(),
             settings,
-            &crate::flow::BoundarySeal::open(),
+            &crate::flow::BlockBoundary::open(),
         );
 
         let map = crate::hardness::HardnessMap::for_block(7, at_origin(), settings.hardness);
@@ -857,7 +857,7 @@ mod tests {
             7,
             at_origin(),
             TEST_SETTINGS,
-            &crate::flow::BoundarySeal::open(),
+            &crate::flow::BlockBoundary::open(),
         );
 
         let mut channel_loss = (0.0f64, 0u32);

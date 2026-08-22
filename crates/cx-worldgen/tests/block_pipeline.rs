@@ -206,6 +206,35 @@ fn flow_is_continuous_over_100_km_of_channel_across_the_seam() {
     ];
     println!("two blocks generated in {:?}", started.elapsed());
 
+    // Diagnostic: where does the regional model think drainage crosses into
+    // each block, and how much? Printed so a discharge failure below can be
+    // compared against the model's own opinion of the seam.
+    for (side, block) in blocks.iter().enumerate() {
+        let generator =
+            cx_worldgen::ElevationGenerator::with_world(SEED, settings.terrain, settings.world);
+        let boundary = cx_worldgen::RegionalWater::boundary_for_block(
+            &generator,
+            block.coordinates,
+            settings.region,
+        );
+        let mut top: Vec<(&str, usize, f32)> = Vec::new();
+        for (name, influx) in [
+            ("north", &boundary.influx_north),
+            ("south", &boundary.influx_south),
+            ("west", &boundary.influx_west),
+            ("east", &boundary.influx_east),
+        ] {
+            for (i, area) in influx.iter().enumerate() {
+                if *area > 0.0 {
+                    top.push((name, i, *area));
+                }
+            }
+        }
+        top.sort_by(|a, b| b.2.total_cmp(&a.2));
+        top.truncate(5);
+        println!("block {side} influx top-5: {top:?}");
+    }
+
     let span = EROSION_CELLS_PER_BLOCK_EDGE; // cells from one block's core to the next's
     let cell_area = EROSION_CELL_SIZE * EROSION_CELL_SIZE;
     let core = HALO_CELLS..HALO_CELLS + span;
@@ -235,6 +264,8 @@ fn flow_is_continuous_over_100_km_of_channel_across_the_seam() {
     let mut weakest_entry = f32::INFINITY;
     let mut entry_flowlines: Vec<f32> = Vec::new();
     let mut uphill_steps: Vec<f32> = Vec::new();
+    let mut worst_discharge_ratio = f32::INFINITY;
+    let mut longest_merge = 0u32;
 
     for (side, block) in blocks.iter().enumerate() {
         for z in core.clone().step_by(4) {
@@ -337,6 +368,48 @@ fn flow_is_continuous_over_100_km_of_channel_across_the_seam() {
                         }
                         weakest_entry = weakest_entry.min(best);
                         entry_flowlines.push(best);
+
+                        // Discharge continuity, possible only now that the
+                        // regional model seeds boundary influx. The 32 m
+                        // coarse model may cross the seam a few hundred
+                        // metres from where the fine channel does, so the
+                        // influx joins the fine river a short way downstream
+                        // rather than at the entry cell — what must hold is
+                        // that the river *recovers* its size within a merge
+                        // distance, not that the entry cell alone carries it.
+                        let exit_area = network.accumulation(walker.cell);
+                        if exit_area > 0.0 {
+                            let mut recovered = best;
+                            let mut probe = other_cell;
+                            let mut merge_cells = 0u32;
+                            for step in 0..2048u32 {
+                                if recovered >= exit_area * 0.25 {
+                                    merge_cells = step;
+                                    break;
+                                }
+                                let Some(next_probe) = blocks[other_side].network.downstream(probe)
+                                else {
+                                    merge_cells = step;
+                                    break;
+                                };
+                                probe = next_probe;
+                                recovered =
+                                    recovered.max(blocks[other_side].network.accumulation(probe));
+                                merge_cells = step + 1;
+                            }
+                            longest_merge = longest_merge.max(merge_cells);
+                            worst_discharge_ratio =
+                                worst_discharge_ratio.min(recovered / exit_area);
+                            assert!(
+                                recovered >= exit_area * 0.25,
+                                "a river carrying {exit_area:.0} cells of catchment \
+                                 crossed into block {other_side} at ({}, {}) and never \
+                                 recovered past {recovered:.0} within four kilometres — \
+                                 influx is not reaching the receiving block",
+                                other_cell.x(),
+                                other_cell.z(),
+                            );
+                        }
                         assert!(
                             best >= 64.0,
                             "a channel crossed the seam and vanished: the strongest \
@@ -382,7 +455,8 @@ fn flow_is_continuous_over_100_km_of_channel_across_the_seam() {
     println!(
         "{walks} walks covered {:.1} km of unique channel with {crossings} seam crossings; \
          worst uphill step at the seam {worst_uphill_at_seam:.2} m, worst standing-water \
-         divergence {worst_fill_divergence:.1} m, weakest entry flowline {weakest_entry:.0} cells",
+         divergence {worst_fill_divergence:.1} m, weakest entry flowline {weakest_entry:.0} cells, \
+         worst discharge ratio {worst_discharge_ratio:.2}, longest merge {longest_merge} cells",
         unique_distance / 1_000.0
     );
     assert!(
