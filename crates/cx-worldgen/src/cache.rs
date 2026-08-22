@@ -404,6 +404,10 @@ mod tests {
                 rounds: 1,
                 ..ThermalSettings::DEFAULT
             },
+            // No regional model: it costs seconds a block on a CI runner and
+            // the round-trip identity these tests prove holds with any seal —
+            // the load path rebuilds with the same settings either way.
+            region: crate::region::RegionSettings::NONE,
             ..WorldSettings::default()
         }
     }

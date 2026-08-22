@@ -239,6 +239,10 @@ mod tests {
             erosion: ErosionSettings::NONE,
             thermal: ThermalSettings::NONE,
             carve: CarveSettings::NONE,
+            // No regional model either: these blocks exist to test delivery
+            // machinery, and the model was the marginal cost that pushed
+            // three-block waits past CI patience.
+            region: crate::region::RegionSettings::NONE,
             ..WorldSettings::default()
         }
     }
@@ -246,8 +250,10 @@ mod tests {
     /// Polls until `count` blocks have arrived or patience runs out.
     fn collect_blocks(pool: &GenerationPool, count: usize) -> Vec<GeneratedBlock> {
         let mut blocks = Vec::new();
-        // Generous: a NO_EROSION block is seconds, CI machines are slow.
-        for _ in 0..1_200 {
+        // Generous: a NO_EROSION block is seconds, CI machines are slow —
+        // and the whole suite runs in parallel around this, so the budget is
+        // sized for a contended 4-core runner, not for the block.
+        for _ in 0..2_400 {
             blocks.extend(pool.poll());
             if blocks.len() >= count {
                 break;

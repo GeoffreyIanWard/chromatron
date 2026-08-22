@@ -170,7 +170,7 @@ impl WorldSettings {
         erosion: ErosionSettings::NONE,
         thermal: ThermalSettings::NONE,
         carve: CarveSettings::NONE,
-        region: crate::region::RegionSettings::DEFAULT,
+        region: crate::region::RegionSettings::NONE,
     };
 }
 

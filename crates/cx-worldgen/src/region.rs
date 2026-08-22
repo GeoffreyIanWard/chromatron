@@ -78,6 +78,27 @@ impl RegionSettings {
     };
 }
 
+impl RegionSettings {
+    /// No regional model at all: every boundary stays open, exactly the
+    /// pre-regional behaviour. For profiles whose semantics do not involve
+    /// seams — `no-erosion` above all, whose terrain has no erosion for the
+    /// coarse model to track — and for tests that generate throwaway blocks
+    /// where the model would be minutes of CI time spent proving nothing.
+    pub const NONE: Self = Self {
+        cell_size: 32.0,
+        radius_blocks: -1,
+        margin: 0.0,
+        erosion_rounds: 0,
+        erosion_timestep: 0.0,
+        erodibility: 0.0,
+    };
+
+    /// Whether this configuration builds a model at all.
+    pub const fn is_none(&self) -> bool {
+        self.radius_blocks < 0
+    }
+}
+
 impl Default for RegionSettings {
     fn default() -> Self {
         Self::DEFAULT
@@ -110,6 +131,16 @@ impl RegionalWater {
         block: BlockCoordinates,
         settings: RegionSettings,
     ) -> Self {
+        if settings.is_none() {
+            return Self {
+                start: (0, 0),
+                width: 0,
+                height: 0,
+                cell_size: 1.0,
+                margin: 0.0,
+                filled: Vec::new(),
+            };
+        }
         let cell = settings.cell_size.max(1.0);
         let reach = settings.radius_blocks.max(0) as f32 * BLOCK_SIZE;
 
@@ -159,6 +190,9 @@ impl RegionalWater {
     /// about the same position must get the same answer, and nearest-cell on
     /// a shared lattice cannot disagree.
     pub fn floor_at(&self, world_x: f32, world_z: f32) -> f32 {
+        if self.filled.is_empty() {
+            return f32::NEG_INFINITY;
+        }
         let x = ((world_x / self.cell_size).floor() as i64 - self.start.0)
             .clamp(0, self.width as i64 - 1) as usize;
         let z = ((world_z / self.cell_size).floor() as i64 - self.start.1)

@@ -44,6 +44,8 @@ fn cheapest() -> WorldSettings {
         erosion: ErosionSettings::NONE,
         thermal: ThermalSettings::NONE,
         carve: CarveSettings::NONE,
+        // And no regional model: nothing here reads a seam.
+        region: cx_worldgen::RegionSettings::NONE,
         ..WorldSettings::default()
     }
 }
