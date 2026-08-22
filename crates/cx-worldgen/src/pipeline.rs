@@ -54,7 +54,7 @@ use crate::worldmap::WorldMapSettings;
 /// cache-vs-regenerate equivalence test in `cache.rs` is the backstop — it
 /// fails on the first machine with a stale cache directory... which a test
 /// tempdir never is, so treat the bump as part of any terrain-changing PR.
-pub const GENERATOR_VERSION: u32 = 1;
+pub const GENERATOR_VERSION: u32 = 2;
 
 impl WorldSettings {
     /// A stable digest of every knob that shapes terrain.
@@ -91,6 +91,7 @@ impl WorldSettings {
             eat(value.to_bits());
         }
         eat(e.rounds);
+        eat(e.reroute_every);
         eat(e.hardness.wavelength.to_bits());
         eat(e.hardness.contrast.to_bits());
 
