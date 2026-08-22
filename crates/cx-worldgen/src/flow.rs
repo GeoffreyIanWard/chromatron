@@ -116,7 +116,14 @@ pub struct FlowNetwork {
     /// drains into it. A by-product of [`accumulate`]'s traversal, kept because
     /// erosion needs the same ordering reversed and recomputing it would be a
     /// second full pass over 26 million cells for information already derived.
+    ///
+    /// Grouped by solve layer — `order[layer_starts[n]..layer_starts[n + 1]]`
+    /// is layer `n`, and every receiver of a cell in layer `n` lies in an
+    /// earlier layer. That is what lets erosion solve a layer's cells in
+    /// parallel while remaining bit-identical to a serial walk.
     order: Vec<u32>,
+    /// Bucket boundaries into [`FlowNetwork::order`], one past the last.
+    layer_starts: Vec<usize>,
 }
 
 impl FlowNetwork {
@@ -129,13 +136,14 @@ impl FlowNetwork {
         let filled = fill_depressions(elevation);
         let across_flats = resolve_flats(&filled);
         let direction = flow_directions(&filled, &across_flats);
-        let (accumulation, order) = accumulate(&filled, &direction);
+        let (accumulation, order, layer_starts) = accumulate(&filled, &direction);
 
         Self {
             filled,
             direction,
             accumulation,
             order,
+            layer_starts,
         }
     }
 
@@ -156,13 +164,14 @@ impl FlowNetwork {
     pub fn build_pit_free(surface: BlockGrid) -> Self {
         let across_flats = resolve_flats(&surface);
         let direction = flow_directions(&surface, &across_flats);
-        let (accumulation, order) = accumulate(&surface, &direction);
+        let (accumulation, order, layer_starts) = accumulate(&surface, &direction);
 
         Self {
             filled: surface,
             direction,
             accumulation,
             order,
+            layer_starts,
         }
     }
 
@@ -237,6 +246,7 @@ impl FlowNetwork {
     /// no remaining reader. [`Self::drainage_order`] returns empty afterwards.
     pub fn shed_erosion_order(&mut self) {
         self.order = Vec::new();
+        self.layer_starts = Vec::new();
     }
 
     /// Cells in drainage order — everything upstream of a cell comes before it.
@@ -246,6 +256,13 @@ impl FlowNetwork {
     /// a single pass rather than an iteration to convergence.
     pub fn drainage_order(&self) -> &[u32] {
         &self.order
+    }
+
+    /// Bucket boundaries of the solve layers within
+    /// [`FlowNetwork::drainage_order`]. Empty after
+    /// [`FlowNetwork::shed_erosion_order`].
+    pub(crate) fn drainage_layer_starts(&self) -> &[usize] {
+        &self.layer_starts
     }
 
     /// The cell a flat index refers to, for walking [`Self::drainage_order`].
@@ -746,17 +763,6 @@ fn flow_directions(filled: &BlockGrid, across_flats: &[u32]) -> Vec<FlowDir> {
 /// with accumulation refusing to collect inside any lake. Deriving the order
 /// from the direction field itself cannot make that mistake, whatever later
 /// stages do to the field.
-/// How sharply multiple-flow-direction weighting favours the steepest neighbour.
-///
-/// Flow leaving a cell is split across *every* downslope neighbour in proportion
-/// to `slope^MFD_EXPONENT`. At 1.0 the split is gentle and drainage smears
-/// across hillsides; as the exponent grows it concentrates, and in the limit it
-/// is D8 again.
-///
-/// 2.0 keeps channels sharp while removing the direction bias described on
-/// [`accumulate`].
-const MFD_EXPONENT: f32 = 2.0;
-
 /// Flow accumulation, split across every downslope neighbour.
 ///
 /// # Why not simply follow the D8 direction
@@ -775,8 +781,13 @@ const MFD_EXPONENT: f32 = 2.0;
 /// erosion passed against it, because "channels cut more than hillslopes" is
 /// still perfectly true when the channels are straight lines.
 ///
-/// So flow is split across all downslope neighbours, weighted by
-/// `slope^MFD_EXPONENT` (Freeman 1991; Quinn 1991). The direction of steepest
+/// So flow is split across all downslope neighbours, weighted by the slope
+/// **squared** (Freeman 1991; Quinn 1991). Squaring keeps channels sharp —
+/// weighting by raw slope smears drainage across hillsides, and ever-higher
+/// powers converge back on D8 — while removing the direction bias described
+/// above. The exponent is fixed rather than a setting because the multiply
+/// below is exact and portable where a general `powf` is neither; making it
+/// tunable again means paying that portability back. The direction of steepest
 /// descent still gets most of it, but the total is no longer confined to eight
 /// rays, and the grid stops printing itself into the terrain.
 ///
@@ -791,9 +802,16 @@ const MFD_EXPONENT: f32 = 2.0;
 /// cell when its last contributor is done. Weights are recomputed as each cell
 /// is processed rather than stored — eight per cell over 26 million cells would
 /// be 840 MB, against a 0.42 GB budget for the whole working set (`ADR-0015`).
-fn accumulate(filled: &BlockGrid, direction: &[FlowDir]) -> (Vec<f32>, Vec<u32>) {
+fn accumulate(filled: &BlockGrid, direction: &[FlowDir]) -> (Vec<f32>, Vec<u32>, Vec<usize>) {
     let mut accumulation = vec![1.0f32; CELLS];
-    let mut order: Vec<u32> = Vec::with_capacity(CELLS);
+
+    // Each cell's solve layer: one more than the deepest of its senders.
+    // Finalised exactly when the cell's in-degree reaches zero, which is the
+    // moment Kahn's queue pops it — so layering rides the pass for the cost
+    // of one max per edge. The erosion solve runs layers in parallel; see
+    // `drainage_layer_starts` for the contract.
+    let mut level = vec![0u32; CELLS];
+    let mut buckets: Vec<Vec<u32>> = Vec::new();
 
     // How many cells send flow to each. At most eight, so a byte.
     let mut incoming = vec![0u8; CELLS];
@@ -801,7 +819,9 @@ fn accumulate(filled: &BlockGrid, direction: &[FlowDir]) -> (Vec<f32>, Vec<u32>)
         let Some(cell) = unflat(index as u32) else {
             continue;
         };
-        each_receiver(filled, direction, cell, |next, _| {
+        // Weight-free: this pass only counts edges, and the receiver set is
+        // identical with or without the share arithmetic.
+        each_receiver_index(filled, direction, cell, |next| {
             if let Some(slot) = incoming.get_mut(flat(next)) {
                 *slot = slot.saturating_add(1);
             }
@@ -815,7 +835,13 @@ fn accumulate(filled: &BlockGrid, direction: &[FlowDir]) -> (Vec<f32>, Vec<u32>)
         .collect();
 
     while let Some(index) = ready.pop_front() {
-        order.push(index);
+        let cell_level = level.get(index as usize).copied().unwrap_or(0) as usize;
+        if buckets.len() <= cell_level {
+            buckets.resize_with(cell_level + 1, Vec::new);
+        }
+        if let Some(bucket) = buckets.get_mut(cell_level) {
+            bucket.push(index);
+        }
 
         let index = index as usize;
         let Some(cell) = unflat(index as u32) else {
@@ -838,6 +864,9 @@ fn accumulate(filled: &BlockGrid, direction: &[FlowDir]) -> (Vec<f32>, Vec<u32>)
         });
 
         for slot in released.iter().flatten() {
+            if let Some(receiver_level) = level.get_mut(*slot) {
+                *receiver_level = (*receiver_level).max(cell_level as u32 + 1);
+            }
             if let Some(remaining) = incoming.get_mut(*slot) {
                 *remaining = remaining.saturating_sub(1);
                 if *remaining == 0 {
@@ -847,7 +876,19 @@ fn accumulate(filled: &BlockGrid, direction: &[FlowDir]) -> (Vec<f32>, Vec<u32>)
         }
     }
 
-    (accumulation, order)
+    // Flatten ascending by layer. Still a topological order — an edge's
+    // receiver is always in a strictly deeper layer — and the accumulation
+    // sums above were written in the queue's own order, so changing what
+    // *this* list holds moves no bits anywhere.
+    let mut order: Vec<u32> = Vec::with_capacity(CELLS);
+    let mut starts: Vec<usize> = Vec::with_capacity(buckets.len() + 1);
+    for bucket in &buckets {
+        starts.push(order.len());
+        order.extend_from_slice(bucket);
+    }
+    starts.push(order.len());
+
+    (accumulation, order, starts)
 }
 
 /// Calls `visit` once per downslope neighbour with its share of the flow.
@@ -894,7 +935,13 @@ fn each_receiver(
         // Gradient, not drop, for the reason `flow_directions` gives: comparing
         // raw drops would over-weight the diagonals by 41% and reintroduce the
         // bias this function exists to remove.
-        let weight = (drop / distance).powf(MFD_EXPONENT);
+        //
+        // Squared by multiplication, not `powf`: an exact multiply is
+        // deterministic on every platform where libm's `powf` is not, and
+        // this line runs for every downhill neighbour of every cell of every
+        // network rebuild.
+        let gradient = drop / distance;
+        let weight = gradient * gradient;
         if let Some(slot) = weights.get_mut(index) {
             *slot = weight;
         }
@@ -920,6 +967,39 @@ fn each_receiver(
     // Flat, or an outlet. Whatever D8 decided, at full strength.
     if let Some(next) = step(cell, direction.get(flat(cell)).copied().unwrap_or(NO_FLOW)) {
         visit(next, 1.0);
+    }
+}
+
+/// [`each_receiver`], without the weights: visits the same receiver set and
+/// nothing else, skipping the share arithmetic entirely.
+///
+/// Exists for the passes that only need *who* receives — the incoming-degree
+/// count above all — where computing `(drop/distance)^2` per neighbour was
+/// measurable cost spent on numbers nobody read. The sets are identical
+/// because a weight is positive exactly when its drop is: heights are `f32`
+/// metres, so a nonzero drop is at least one ulp (~3e-5 at a few hundred
+/// metres), far too large for the squared gradient to underflow to zero.
+pub(crate) fn each_receiver_index(
+    filled: &BlockGrid,
+    direction: &[FlowDir],
+    cell: ErosionCell,
+    mut visit: impl FnMut(ErosionCell),
+) {
+    let height = filled.get(cell);
+    let mut any = false;
+
+    for (dx, dz) in NEIGHBOURS.iter() {
+        let Some(next) = offset(cell, *dx, *dz) else {
+            continue;
+        };
+        if height - filled.get(next) > 0.0 {
+            visit(next);
+            any = true;
+        }
+    }
+
+    if !any && let Some(next) = step(cell, direction.get(flat(cell)).copied().unwrap_or(NO_FLOW)) {
+        visit(next);
     }
 }
 

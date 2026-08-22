@@ -26,7 +26,7 @@ An effectively infinite world, deterministically generated from a seed, eroded o
 | Check | Target |
 |---|---|
 | 4×4 block area generated in two different orders | identical field hashes — **met**: 48 block generations in 885 s, all 16 identical across orders and all 16 distinct from each other. Gated in CI. |
-| Single block generation (full pipeline; erosion at 5,120² per `ADR-0015`, bake at 16,384²) | < 20 s, 8 background threads |
+| Single block generation (full pipeline; erosion at 5,120² per `ADR-0015`, bake at 16,384²) | < 20 s, 8 background threads — **close**: 45 s → 24 s on the 12-core dev machine (layer-parallel solve, weight-free topology passes, re-route every 2nd round). The remaining gap is the drainage rebuilds; see the closeout notes. |
 | Chunk extraction from cached block | < 5 ms |
 | Terrain mesh bake, one chunk | < 200 ms offline |
 | Flow continuity walk over 100 km of channel | unbroken across chunk *and* block seams |
@@ -154,6 +154,21 @@ affordable to have both.
   Presented channel *depth* is explicitly presentation, not hydrology — discharge volume
   is unsimulated. Known and accepted: water floats 15 cm above lake beds because the
   baked terrain *is* the fill level; baking beds from the pre-fill ground is future work.
+
+- **Generation speed, second pass** — 45 s → 24 s a block, in three steps with three
+  different guarantees. (1) *Bit-identical*: the erosion solve now runs layer-parallel —
+  `accumulate` buckets its topological order by dependency depth as a by-product of the
+  Kahn pass it already makes, and a layer's cells solve concurrently through relaxed
+  atomics with a barrier between layers; every cell does the same arithmetic on the same
+  inputs, proven by an unchanged terrain digest. Topology-only passes also stopped
+  computing flow shares nobody read. (2) *Exact-substitution*: `powf(x, 2)` became `x·x`
+  and `area^0.5` became `sqrt` — bit-identical on this platform's libm, strictly more
+  portable everywhere, `GENERATOR_VERSION` bumped as insurance for platforms whose `powf`
+  disagrees. (3) *A knob, chosen by eye*: `reroute_every: 2` halves the drainage rebuilds
+  that dominate a round's cost; valleys, rivers, and relief are unchanged, hillside gully
+  texture smooths (capture happens half as often), and the two stills were compared side
+  by side before the default changed. Every-round re-routing remains one setting away.
+  `--example genprofile` is the stopwatch these numbers come from.
 
 ## Notes
 

@@ -34,7 +34,7 @@ pub(crate) const BANDS: usize = 64;
 ///
 /// Cores, capped at the band count. This number affects speed only — see the
 /// module docs for why it cannot affect output.
-fn workers() -> usize {
+pub(crate) fn workers() -> usize {
     std::thread::available_parallelism()
         .map(std::num::NonZero::get)
         .unwrap_or(1)

@@ -133,6 +133,17 @@ pub struct ErosionSettings {
     /// Zero is the `no-erosion` profile: the surface comes back untouched, and
     /// S07 requires that to still be a valid world.
     pub rounds: u32,
+    /// Solves per drainage re-route. At 1 every round rebuilds the network;
+    /// at 2 rounds pair up against one network, halving the rebuilds.
+    ///
+    /// The re-route is what lets channels capture each other, and it is also
+    /// most of a round's cost. Between re-routes a solve reads the *fresh*
+    /// heights against the *stale* topology and shares — heights keep
+    /// evolving, capture waits for the next rebuild. Compared side by side at
+    /// 2, the valley systems and channel networks match; what changes is
+    /// mid-run capture timing, which nothing downstream reads. The final
+    /// round always ends in a full rebuild regardless.
+    pub reroute_every: u32,
 }
 
 impl Default for ErosionSettings {
@@ -155,6 +166,10 @@ impl ErosionSettings {
         timestep: 4.0e4,
         hardness: crate::hardness::HardnessSettings::DEFAULT,
         rounds: 6,
+        // Two solves per re-route: measured against every-round rebuilds on
+        // the same seed, the terrain keeps its valleys and network while a
+        // third of the block's generation time goes away.
+        reroute_every: 2,
     };
 }
 
@@ -167,6 +182,7 @@ impl ErosionSettings {
         timestep: 0.0,
         hardness: crate::hardness::HardnessSettings::UNIFORM,
         rounds: 0,
+        reroute_every: 1,
     };
 }
 
@@ -211,8 +227,9 @@ pub fn erode(
     // and in a basin it would report it as erosion *raising ground*.
     let before = network.filled().clone();
 
+    let mut surface = network.filled().clone();
     for round in 0..settings.rounds {
-        let eroded = incise(&network, &hardness, settings);
+        let eroded = incise(&surface, &network, &hardness, settings);
 
         // Re-route against the surface erosion just produced. Skipping this
         // freezes channels where the uneroded noise put them; capture — one
@@ -226,11 +243,21 @@ pub fn erode(
         // runs the full fill as a safety net — it is the network every later
         // stage reads, and the one place a wrong "cannot happen" would
         // otherwise propagate silently.
-        network = if round + 1 == settings.rounds {
-            FlowNetwork::build(eroded)
+        // Re-route on the cadence the settings ask for. A round that skips
+        // the rebuild carries its surface forward and solves again against
+        // the stale network: heights are always read fresh, so the solve
+        // stays a convex combination and the pit-free argument still holds —
+        // only *capture* waits for the next rebuild.
+        let cadence = settings.reroute_every.max(1);
+        if round + 1 == settings.rounds {
+            network = FlowNetwork::build(eroded);
+            surface = network.filled().clone();
+        } else if (round + 1).is_multiple_of(cadence) {
+            network = FlowNetwork::build_pit_free(eroded);
+            surface = network.filled().clone();
         } else {
-            FlowNetwork::build_pit_free(eroded)
-        };
+            surface = eroded;
+        }
     }
 
     let report = measure(&before, &network, settings.rounds);
@@ -270,64 +297,152 @@ pub fn erode(
 /// [`crate::flow::FlowNetwork::drainage_order`] is a topological order over the
 /// same multi-receiver graph the shares come from.
 fn incise(
+    surface: &BlockGrid,
     network: &FlowNetwork,
     hardness: &crate::hardness::HardnessMap,
     settings: ErosionSettings,
 ) -> BlockGrid {
-    let mut surface = network.filled().clone();
+    use std::sync::atomic::AtomicU32;
 
-    for index in network.drainage_order().iter().rev() {
-        let Some(cell) = FlowNetwork::cell_at(*index) else {
-            continue;
-        };
+    // The layers come with the network: `accumulate` buckets its topological
+    // order by solve depth as a by-product of the pass it already makes.
+    let order = network.drainage_order();
+    let starts = network.drainage_layer_starts();
 
-        let here = surface.get(cell);
+    // The surface as atomic bits, so layer-parallel workers can write their
+    // own cells and read earlier layers' without aliasing rules getting in
+    // the way. Relaxed atomics compile to plain loads and stores on every
+    // architecture this ships on; the barrier between layers is the actual
+    // synchronisation.
+    let cells: Vec<AtomicU32> = surface
+        .as_slice()
+        .iter()
+        .map(|value| AtomicU32::new(value.to_bits()))
+        .collect();
 
-        // Drainage *area*, not cell count: the law is in metres squared, and a
-        // count would tie the result to the erosion grid's resolution, which
-        // `ADR-0015` is free to change.
-        let area = f64::from(network.accumulation(cell))
-            * f64::from(cx_core::math::EROSION_CELL_SIZE).powi(2);
-        // Erodibility scaled by the rock under this cell. Soft ground gives
-        // way faster, hard ground resists — this one factor is where valley
-        // width, cliff bands, and (eventually) waterfall steps come from.
-        let common = f64::from(settings.timestep)
-            * f64::from(settings.erodibility)
-            * f64::from(hardness.multiplier(cell))
-            * area.powf(f64::from(settings.area_exponent));
+    let workers = crate::parallel::workers();
+    let barrier = std::sync::Barrier::new(workers);
+    std::thread::scope(|scope| {
+        let barrier = &barrier;
+        let cells = &cells;
 
-        let mut weight_sum = 0.0f64;
-        let mut weighted_heights = 0.0f64;
+        for worker in 0..workers {
+            scope.spawn(move || {
+                // Deepest layer first: a cell's receivers are in *earlier*
+                // layers, so walking layers in reverse means every receiver
+                // is final before anything reads it — the exact guarantee
+                // the serial reversed walk gave, one layer at a time.
+                for window in starts.windows(2).rev() {
+                    let (Some(start), Some(end)) = (window.first(), window.get(1)) else {
+                        continue;
+                    };
+                    if let Some(layer) = order.get(*start..*end) {
+                        // Static split by position, so which worker solves a
+                        // cell is a function of the layer alone — though the
+                        // result would be identical however it was split.
+                        let per = layer.len().div_ceil(workers).max(1);
+                        for index in layer.iter().skip(worker * per).take(per) {
+                            solve_cell(cells, network, hardness, settings, *index);
+                        }
+                    }
+                    // Nobody starts the next layer until every cell of this
+                    // one is written. This wait is what makes the relaxed
+                    // stores above visible in order.
+                    barrier.wait();
+                }
+            });
+        }
+    });
 
-        network.for_each_receiver(cell, |receiver, share| {
-            let there = surface.get(receiver);
+    let values: Vec<f32> = cells
+        .into_iter()
+        .map(|bits| f32::from_bits(bits.into_inner()))
+        .collect();
+    // The length is CELLS by construction; the fallback is unreachable but
+    // cheaper to carry than an unwrap the lint set bans.
+    BlockGrid::from_cells(values).unwrap_or_else(|| surface.clone())
+}
 
-            // Nothing to cut towards. Inside a filled flat the receiver is at
-            // the same height, and stream power is zero there anyway.
-            if here <= there {
-                return;
-            }
+/// A cell's index into the flat grid, mirroring `BlockGrid`'s own layout.
+fn receiver_index(cell: ErosionCell) -> usize {
+    cell.z() as usize * crate::block::EDGE as usize + cell.x() as usize
+}
 
-            let distance = FlowNetwork::distance_to(cell, receiver);
-            let factor = common * f64::from(share) / f64::from(distance);
+/// One cell of the implicit solve — the exact arithmetic of the serial walk,
+/// reading and writing through the atomic surface.
+fn solve_cell(
+    cells: &[std::sync::atomic::AtomicU32],
+    network: &FlowNetwork,
+    hardness: &crate::hardness::HardnessMap,
+    settings: ErosionSettings,
+    index: u32,
+) {
+    use std::sync::atomic::Ordering::Relaxed;
 
-            weight_sum += factor;
-            weighted_heights += factor * f64::from(there);
-        });
+    let Some(cell) = FlowNetwork::cell_at(index) else {
+        return;
+    };
+    let read = |at: usize| -> f32 {
+        cells
+            .get(at)
+            .map(|bits| f32::from_bits(bits.load(Relaxed)))
+            .unwrap_or_default()
+    };
 
-        if weight_sum <= 0.0 {
-            // An outlet, or a cell with nothing below it. Held fixed: the
-            // outlet is where the block's water leaves, and lowering it would
-            // let the whole block erode downwards with nothing to erode
-            // *towards*.
-            continue;
+    let here = read(index as usize);
+
+    // Drainage *area*, not cell count: the law is in metres squared, and a
+    // count would tie the result to the erosion grid's resolution, which
+    // `ADR-0015` is free to change.
+    let area =
+        f64::from(network.accumulation(cell)) * f64::from(cx_core::math::EROSION_CELL_SIZE).powi(2);
+    // `sqrt` for the conventional exponent, `powf` for any other: the square
+    // root is IEEE-correctly-rounded and identical on every platform, where
+    // `powf` is neither — and this line runs 26 million times a round.
+    #[allow(clippy::float_cmp, reason = "exact match selects an exact fast path")]
+    let area_term = if settings.area_exponent == 0.5 {
+        area.sqrt()
+    } else {
+        area.powf(f64::from(settings.area_exponent))
+    };
+    // Erodibility scaled by the rock under this cell. Soft ground gives way
+    // faster, hard ground resists — this one factor is where valley width,
+    // cliff bands, and (eventually) waterfall steps come from.
+    let common = f64::from(settings.timestep)
+        * f64::from(settings.erodibility)
+        * f64::from(hardness.multiplier(cell))
+        * area_term;
+
+    let mut weight_sum = 0.0f64;
+    let mut weighted_heights = 0.0f64;
+
+    network.for_each_receiver(cell, |receiver, share| {
+        let there = read(receiver_index(receiver));
+
+        // Nothing to cut towards. Inside a filled flat the receiver is at
+        // the same height, and stream power is zero there anyway.
+        if here <= there {
+            return;
         }
 
-        let updated = (f64::from(here) + weighted_heights) / (1.0 + weight_sum);
-        surface.set(cell, updated as f32);
+        let distance = FlowNetwork::distance_to(cell, receiver);
+        let factor = common * f64::from(share) / f64::from(distance);
+
+        weight_sum += factor;
+        weighted_heights += factor * f64::from(there);
+    });
+
+    if weight_sum <= 0.0 {
+        // An outlet, or a cell with nothing below it. Held fixed: the outlet
+        // is where the block's water leaves, and lowering it would let the
+        // whole block erode downwards with nothing to erode *towards*.
+        return;
     }
 
-    surface
+    let updated = (f64::from(here) + weighted_heights) / (1.0 + weight_sum);
+    if let Some(slot) = cells.get(index as usize) {
+        slot.store((updated as f32).to_bits(), Relaxed);
+    }
 }
 
 /// Measures what erosion did, over the core only.
@@ -385,6 +500,9 @@ mod tests {
         // own test below and its own module tests.
         hardness: crate::hardness::HardnessSettings::UNIFORM,
         rounds: 4,
+        // Every round, so these tests keep asserting the per-round solve
+        // they were written about; the cadence has its own test below.
+        reroute_every: 1,
     };
 
     /// Every test erodes the same nominal block.
@@ -573,6 +691,45 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The re-route cadence changes cost, not soundness.
+    ///
+    /// At `reroute_every: 2` half the solves run against a stale network with
+    /// fresh heights. Everything structural must survive that: material only
+    /// ever leaves, the fill is still the identity on the result (the
+    /// pit-free argument holds per solve, not per rebuild), and erosion still
+    /// actually happens.
+    #[test]
+    fn a_sparser_reroute_cadence_is_still_sound() {
+        let settings = ErosionSettings {
+            reroute_every: 2,
+            ..TEST_SETTINGS
+        };
+        let filled = FlowNetwork::build(rough_slope()).filled().clone();
+        let (after, network, report) = erode(rough_slope(), 7, at_origin(), settings);
+
+        assert!(report.mean_lowering > 0.0, "the cadence erased erosion");
+        assert_eq!(report.interior_sinks, 0);
+
+        let refilled = FlowNetwork::build(after.clone());
+        for z in (0..EDGE).step_by(41) {
+            for x in (0..EDGE).step_by(41) {
+                let Some(cell) = ErosionCell::new(x, z) else {
+                    continue;
+                };
+                assert!(
+                    after.get(cell) - filled.get(cell) <= 0.001,
+                    "({x}, {z}) rose under the sparse cadence"
+                );
+                assert_eq!(
+                    refilled.filled().get(cell),
+                    after.get(cell),
+                    "the sparse cadence let erosion create a pit at ({x}, {z})"
+                );
+            }
+        }
+        drop(network);
     }
 
     /// Soft rock loses more material than hard rock on the same terrain.
