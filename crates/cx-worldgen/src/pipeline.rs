@@ -54,7 +54,7 @@ use crate::worldmap::WorldMapSettings;
 /// cache-vs-regenerate equivalence test in `cache.rs` is the backstop — it
 /// fails on the first machine with a stale cache directory... which a test
 /// tempdir never is, so treat the bump as part of any terrain-changing PR.
-pub const GENERATOR_VERSION: u32 = 2;
+pub const GENERATOR_VERSION: u32 = 3;
 
 impl WorldSettings {
     /// A stable digest of every knob that shapes terrain.
@@ -92,6 +92,13 @@ impl WorldSettings {
         }
         eat(e.rounds);
         eat(e.reroute_every);
+
+        let r = &self.region;
+        for value in [r.cell_size, r.margin, r.erosion_timestep, r.erodibility] {
+            eat(value.to_bits());
+        }
+        eat(r.radius_blocks as u32);
+        eat(r.erosion_rounds);
         eat(e.hardness.wavelength.to_bits());
         eat(e.hardness.contrast.to_bits());
 
@@ -132,6 +139,9 @@ pub struct WorldSettings {
     pub thermal: ThermalSettings,
     /// Channel carving, stage 5.
     pub carve: CarveSettings,
+    /// The regional water model that seals block boundaries
+    /// (`crate::region`).
+    pub region: crate::region::RegionSettings,
 }
 
 impl Default for WorldSettings {
@@ -142,6 +152,7 @@ impl Default for WorldSettings {
             erosion: ErosionSettings::DEFAULT,
             thermal: ThermalSettings::DEFAULT,
             carve: CarveSettings::DEFAULT,
+            region: crate::region::RegionSettings::DEFAULT,
         }
     }
 }
@@ -159,6 +170,7 @@ impl WorldSettings {
         erosion: ErosionSettings::NONE,
         thermal: ThermalSettings::NONE,
         carve: CarveSettings::NONE,
+        region: crate::region::RegionSettings::NONE,
     };
 }
 
@@ -211,19 +223,26 @@ pub fn generate_block(seed: u64, block: BlockCoord, settings: WorldSettings) -> 
     let coordinates = BlockCoordinates::new(block);
     let generator = ElevationGenerator::with_world(seed, settings.terrain, settings.world);
 
+    // The regional water model: shared pour levels for basins that span
+    // block seams, computed from the same positional source both neighbours
+    // read (`crate::region`). The seal it produces guards every depression
+    // fill below.
+    let region = crate::region::RegionalWater::for_block(&generator, coordinates, settings.region);
+    let seal = region.boundary_seal(coordinates);
+
     // 1. Base elevation on the continental surface.
     let elevation = BlockGrid::base_elevation(&generator, coordinates);
 
     // 2 and 3. Fill, route, and erode. `erode` runs the fill itself, because
     // erosion needs drainage and re-routes between rounds anyway.
     let (eroded, network, erosion) =
-        crate::hydraulic::erode(elevation, seed, coordinates, settings.erosion);
+        crate::hydraulic::erode(elevation, seed, coordinates, settings.erosion, &seal);
 
     // 4. Talus relaxation.
     let (relaxed, thermal) = crate::thermal::relax(eroded, settings.thermal);
 
     // 5. Channel carving, which re-routes once more against the surface it cut.
-    let carved = crate::carve::carve(relaxed, &network, settings.carve);
+    let carved = crate::carve::carve(relaxed, &network, settings.carve, &seal);
 
     GeneratedBlock {
         coordinates,
@@ -291,6 +310,7 @@ mod tests {
     /// pipeline reading outside its arguments — so a small case tests the same
     /// thing and the large one confirms it at the size the criterion states.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn a_block_generates_the_same_whatever_ran_before_it() {
         let settings = fast();
 
@@ -321,6 +341,7 @@ mod tests {
     /// Without this, the test above would pass against a generator that returned
     /// the same terrain everywhere.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn neighbouring_blocks_are_not_copies_of_each_other() {
         let settings = fast();
         let a = hash(&generate_block(SEED, BlockCoord::new(0, 0), settings));
@@ -333,6 +354,7 @@ mod tests {
 
     /// A different seed is a different world.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn the_seed_changes_the_world() {
         let settings = fast();
         let block = BlockCoord::new(2, 2);
@@ -347,6 +369,7 @@ mod tests {
     /// Every stage still runs — a world without erosion still needs drainage —
     /// so this checks the stages are no-ops rather than an untaken branch.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn the_no_erosion_profile_produces_a_valid_world() {
         let block = generate_block(SEED, BlockCoord::new(1, 1), WorldSettings::NO_EROSION);
 
@@ -377,6 +400,7 @@ mod tests {
     /// second fill to recover something that had just been computed and thrown
     /// away.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn standing_water_is_recoverable_from_the_two_surfaces() {
         let block = generate_block(SEED, BlockCoord::new(0, 0), fast());
 

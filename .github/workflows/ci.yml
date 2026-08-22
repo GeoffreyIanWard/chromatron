@@ -207,7 +207,13 @@ jobs:
         if: steps.relevance.outputs.run == 'true'
         continue-on-error: true
       - if: steps.relevance.outputs.run == 'true'
-        run: cargo test --locked -p cx-worldgen --test block_pipeline --release -- --ignored --nocapture
+        # Every `#[ignore]`d test in the crate, in release. The convention:
+        # a test that generates or erodes block-scale data is marked ignored
+        # and runs here — once, on Linux, optimised — instead of three times
+        # across the matrix in debug. Worldgen math is platform-independent;
+        # what the matrix keeps is fmt, clippy, and every fast test on every
+        # platform, so a typical PR's feedback arrives in minutes.
+        run: cargo test --locked -p cx-worldgen --release -- --ignored --nocapture --test-threads=2
 
   # S21's graph diff annotates rather than blocking — a check that fails every
   # legitimate architecture change gets switched off within a month. The one

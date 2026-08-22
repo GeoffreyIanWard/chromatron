@@ -239,6 +239,10 @@ mod tests {
             erosion: ErosionSettings::NONE,
             thermal: ThermalSettings::NONE,
             carve: CarveSettings::NONE,
+            // No regional model either: these blocks exist to test delivery
+            // machinery, and the model was the marginal cost that pushed
+            // three-block waits past CI patience.
+            region: crate::region::RegionSettings::NONE,
             ..WorldSettings::default()
         }
     }
@@ -246,8 +250,10 @@ mod tests {
     /// Polls until `count` blocks have arrived or patience runs out.
     fn collect_blocks(pool: &GenerationPool, count: usize) -> Vec<GeneratedBlock> {
         let mut blocks = Vec::new();
-        // Generous: a NO_EROSION block is seconds, CI machines are slow.
-        for _ in 0..1_200 {
+        // Generous: a NO_EROSION block is seconds, CI machines are slow —
+        // and the whole suite runs in parallel around this, so the budget is
+        // sized for a contended 4-core runner, not for the block.
+        for _ in 0..2_400 {
             blocks.extend(pool.poll());
             if blocks.len() >= count {
                 break;
@@ -259,6 +265,7 @@ mod tests {
 
     /// A requested block arrives, off-thread, and is the right block.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn a_wanted_block_arrives() {
         let pool = GenerationPool::start(SEED, cheapest(), None);
         pool.set_wanted(vec![BlockCoord::new(0, 0)]);
@@ -276,6 +283,7 @@ mod tests {
 
     /// Priority order is delivery order for a queued list.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn blocks_arrive_in_priority_order() {
         let pool = GenerationPool::start(SEED, cheapest(), None);
         pool.set_wanted(vec![
@@ -303,6 +311,7 @@ mod tests {
     /// guards is real: the frontier resends its list every frame, far faster
     /// than the caller polls completions.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn resending_the_list_does_not_duplicate_work() {
         let pool = GenerationPool::start(SEED, cheapest(), None);
 
@@ -331,6 +340,7 @@ mod tests {
 
     /// `forget` re-opens a block for generation — the dropped-from-memory case.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn a_forgotten_block_can_be_wanted_again() {
         let pool = GenerationPool::start(SEED, cheapest(), None);
         pool.set_wanted(vec![BlockCoord::new(5, 5)]);
@@ -353,6 +363,7 @@ mod tests {
 
     /// The pool serves from the cache when one is attached.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn a_cached_block_is_served_from_disk() {
         let root = std::env::temp_dir()
             .join("cx-worldgen-pool-tests")

@@ -133,7 +133,13 @@ impl FlowNetwork {
     /// has no further use, and holding both would double the largest allocation
     /// in the pipeline for no purpose.
     pub fn build(elevation: BlockGrid) -> Self {
-        let filled = fill_depressions(elevation);
+        Self::build_sealed(elevation, &BoundarySeal::open())
+    }
+
+    /// [`FlowNetwork::build`], with the grid boundary sealed to a regional
+    /// floor so trans-seam basins fill to a shared level (`crate::region`).
+    pub fn build_sealed(elevation: BlockGrid, seal: &BoundarySeal) -> Self {
+        let filled = fill_depressions(elevation, seal);
         let across_flats = resolve_flats(&filled);
         let direction = flow_directions(&filled, &across_flats);
         let (accumulation, order, layer_starts) = accumulate(&filled, &direction);
@@ -310,9 +316,62 @@ impl FlowNetwork {
 /// drains. Accumulation built on it silently stopped collecting inside every
 /// lake — the largest channel fell from 31% of the block to 1%. [`accumulate`]
 /// derives its own order now.
-fn fill_depressions(mut elevation: BlockGrid) -> BlockGrid {
+/// The regional floor under a grid's boundary (`crate::region`).
+///
+/// One value per boundary cell on each side, in metres. The fill raises a
+/// boundary cell to its floor before seeding, so the flood cannot leave the
+/// grid below the level the *region* says water stands at that position —
+/// which is what makes two blocks fill a shared basin to the same height.
+/// [`BoundarySeal::open`] is negative infinity everywhere: the historical
+/// open boundary, bit-for-bit.
+#[derive(Debug, Clone)]
+pub struct BoundarySeal {
+    /// Floors along `z = 0`.
+    pub north: Vec<f32>,
+    /// Floors along `z = EDGE - 1`.
+    pub south: Vec<f32>,
+    /// Floors along `x = 0`.
+    pub west: Vec<f32>,
+    /// Floors along `x = EDGE - 1`.
+    pub east: Vec<f32>,
+}
+
+impl BoundarySeal {
+    /// No seal: every boundary cell keeps its own height.
+    pub fn open() -> Self {
+        let side = || vec![f32::NEG_INFINITY; EDGE as usize];
+        Self {
+            north: side(),
+            south: side(),
+            west: side(),
+            east: side(),
+        }
+    }
+}
+
+fn fill_depressions(mut elevation: BlockGrid, seal: &BoundarySeal) -> BlockGrid {
     let mut heap: BinaryHeap<Reverse<(u32, u32)>> = BinaryHeap::new();
     let mut done = vec![false; CELLS];
+
+    // Raise the boundary to the regional floor first. A sealed cell acts as
+    // terrain at the floor height for the flood below: water may still leave
+    // the grid, but only over the level the region says it would actually
+    // have to reach — the grid's own arbitrary cut stops being an exit.
+    // Corners take the max of their two sides, and `max` commutes.
+    for x in 0..EDGE {
+        for (z, side) in [(0, &seal.north), (EDGE - 1, &seal.south)] {
+            if let (Some(cell), Some(floor)) = (ErosionCell::new(x, z), side.get(x as usize)) {
+                elevation.set(cell, elevation.get(cell).max(*floor));
+            }
+        }
+    }
+    for z in 0..EDGE {
+        for (x, side) in [(0, &seal.west), (EDGE - 1, &seal.east)] {
+            if let (Some(cell), Some(floor)) = (ErosionCell::new(x, z), side.get(z as usize)) {
+                elevation.set(cell, elevation.get(cell).max(*floor));
+            }
+        }
+    }
 
     // Seed with the whole boundary. Everything drains off the edge of the block
     // eventually, because the grid has no outside — the halo is discarded later

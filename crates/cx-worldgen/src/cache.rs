@@ -151,15 +151,21 @@ impl BlockCache {
 
         // The rest of a generated block is derived, not stored: the terrain is
         // the ground with basins filled, the network is routed from it, and the
-        // generator rebuilds from the seed. Same code path carving used, so
-        // the results are bit-identical — and `tests` proves that rather than
-        // trusting this comment.
-        let network = FlowNetwork::build(ground.clone());
+        // generator rebuilds from the seed. Same code path carving used —
+        // including the same regional boundary seal, or a loaded block's
+        // basins would fill to different levels than the generated one's —
+        // and `tests` proves the bit-identity rather than trusting this
+        // comment.
         let generator = crate::elevation::ElevationGenerator::with_world(
             seed,
             settings.terrain,
             settings.world,
         );
+        let coordinates = crate::block::BlockCoordinates::new(block);
+        let region =
+            crate::region::RegionalWater::for_block(&generator, coordinates, settings.region);
+        let seal = region.boundary_seal(coordinates);
+        let network = FlowNetwork::build_sealed(ground.clone(), &seal);
 
         Some(GeneratedBlock {
             coordinates: crate::block::BlockCoordinates::new(block),
@@ -398,6 +404,10 @@ mod tests {
                 rounds: 1,
                 ..ThermalSettings::DEFAULT
             },
+            // No regional model: it costs seconds a block on a CI runner and
+            // the round-trip identity these tests prove holds with any seal —
+            // the load path rebuilds with the same settings either way.
+            region: crate::region::RegionSettings::NONE,
             ..WorldSettings::default()
         }
     }
@@ -417,6 +427,7 @@ mod tests {
     /// loaded one. Together they are the criterion — the cache is a shortcut
     /// to the generator, never a second source of truth.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn a_cached_block_and_a_regenerated_block_are_identical() {
         let cache = scratch_cache("roundtrip");
         let settings = fast();
@@ -442,6 +453,7 @@ mod tests {
 
     /// Any key mismatch is a miss: seed, block, settings, or pipeline version.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn a_mismatched_key_never_serves_a_block() {
         let cache = scratch_cache("keys");
         let settings = fast();
@@ -476,6 +488,7 @@ mod tests {
 
     /// A flipped bit is a miss, not wrong terrain.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn corruption_is_a_miss_rather_than_wrong_terrain() {
         let cache = scratch_cache("corruption");
         let settings = fast();
@@ -507,6 +520,7 @@ mod tests {
 
     /// The cap evicts the oldest entries first, and only past the cap.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn eviction_removes_the_oldest_entries_past_the_cap() {
         let settings = fast();
         // Cap sized for roughly two entries, so storing three evicts one.

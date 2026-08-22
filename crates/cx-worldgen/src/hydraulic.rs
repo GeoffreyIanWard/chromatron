@@ -214,12 +214,13 @@ pub fn erode(
     seed: u64,
     block: crate::block::BlockCoordinates,
     settings: ErosionSettings,
+    seal: &crate::flow::BoundarySeal,
 ) -> (BlockGrid, FlowNetwork, ErosionReport) {
     // Sampled once and reused every round: hardness is a property of the rock,
     // not of the eroding surface, so it never needs recomputing mid-run.
     let hardness = crate::hardness::HardnessMap::for_block(seed, block, settings.hardness);
 
-    let mut network = FlowNetwork::build(elevation);
+    let mut network = FlowNetwork::build_sealed(elevation, seal);
 
     // The baseline is the **filled** surface, not the raw one. Step 2 runs
     // either way — a world with no erosion still needs drainage — so measuring
@@ -250,7 +251,7 @@ pub fn erode(
         // only *capture* waits for the next rebuild.
         let cadence = settings.reroute_every.max(1);
         if round + 1 == settings.rounds {
-            network = FlowNetwork::build(eroded);
+            network = FlowNetwork::build_sealed(eroded, seal);
             surface = network.filled().clone();
         } else if (round + 1).is_multiple_of(cadence) {
             network = FlowNetwork::build_pit_free(eroded);
@@ -534,9 +535,16 @@ mod tests {
     /// step 2 runs either way — a world without erosion still needs drainage.
     /// Comparing against raw would call the fill's basin-raising a difference.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn zero_rounds_changes_nothing_the_fill_did_not() {
         let filled = FlowNetwork::build(rough_slope()).filled().clone();
-        let (after, _, report) = erode(rough_slope(), 7, at_origin(), ErosionSettings::NONE);
+        let (after, _, report) = erode(
+            rough_slope(),
+            7,
+            at_origin(),
+            ErosionSettings::NONE,
+            &crate::flow::BoundarySeal::open(),
+        );
 
         assert_eq!(report.rounds, 0);
         assert_eq!(report.mean_lowering, 0.0, "no-erosion removed material");
@@ -558,9 +566,16 @@ mod tests {
 
     /// Erosion only ever lowers ground.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn nothing_is_ever_raised_by_erosion() {
         let filled = FlowNetwork::build(rough_slope()).filled().clone();
-        let (after, _, report) = erode(rough_slope(), 7, at_origin(), TEST_SETTINGS);
+        let (after, _, report) = erode(
+            rough_slope(),
+            7,
+            at_origin(),
+            TEST_SETTINGS,
+            &crate::flow::BoundarySeal::open(),
+        );
 
         assert!(
             report.mean_lowering > 0.0,
@@ -592,13 +607,20 @@ mod tests {
     /// implicit form is a weighted average, so the worst it can do is flatten
     /// everything to the outlet height.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn an_absurd_timestep_flattens_rather_than_exploding() {
         let settings = ErosionSettings {
             timestep: 2.0e7,
             rounds: 3,
             ..TEST_SETTINGS
         };
-        let (after, network, report) = erode(rough_slope(), 7, at_origin(), settings);
+        let (after, network, report) = erode(
+            rough_slope(),
+            7,
+            at_origin(),
+            settings,
+            &crate::flow::BoundarySeal::open(),
+        );
 
         assert_eq!(
             report.interior_sinks, 0,
@@ -636,6 +658,7 @@ mod tests {
     /// test here would still pass — the surface would still be filled, still
     /// drain, still never rise.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn a_larger_erodibility_removes_more() {
         let gentle = ErosionSettings {
             erodibility: 1.0e-5,
@@ -646,8 +669,20 @@ mod tests {
             ..TEST_SETTINGS
         };
 
-        let (_, _, gentle_report) = erode(rough_slope(), 7, at_origin(), gentle);
-        let (_, _, fierce_report) = erode(rough_slope(), 7, at_origin(), fierce);
+        let (_, _, gentle_report) = erode(
+            rough_slope(),
+            7,
+            at_origin(),
+            gentle,
+            &crate::flow::BoundarySeal::open(),
+        );
+        let (_, _, fierce_report) = erode(
+            rough_slope(),
+            7,
+            at_origin(),
+            fierce,
+            &crate::flow::BoundarySeal::open(),
+        );
 
         assert!(
             fierce_report.mean_lowering > gentle_report.mean_lowering * 1.5,
@@ -668,8 +703,15 @@ mod tests {
     /// result to be bit-identical. If this ever fails, `build_pit_free` is
     /// unsound and erosion is quietly producing terrain with trapped water.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn the_fill_is_the_identity_on_eroded_terrain() {
-        let (after, _, _) = erode(rough_slope(), 7, at_origin(), TEST_SETTINGS);
+        let (after, _, _) = erode(
+            rough_slope(),
+            7,
+            at_origin(),
+            TEST_SETTINGS,
+            &crate::flow::BoundarySeal::open(),
+        );
 
         let refilled = FlowNetwork::build(after.clone());
         assert_eq!(
@@ -701,13 +743,20 @@ mod tests {
     /// pit-free argument holds per solve, not per rebuild), and erosion still
     /// actually happens.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn a_sparser_reroute_cadence_is_still_sound() {
         let settings = ErosionSettings {
             reroute_every: 2,
             ..TEST_SETTINGS
         };
         let filled = FlowNetwork::build(rough_slope()).filled().clone();
-        let (after, network, report) = erode(rough_slope(), 7, at_origin(), settings);
+        let (after, network, report) = erode(
+            rough_slope(),
+            7,
+            at_origin(),
+            settings,
+            &crate::flow::BoundarySeal::open(),
+        );
 
         assert!(report.mean_lowering > 0.0, "the cadence erased erosion");
         assert_eq!(report.interior_sinks, 0);
@@ -739,6 +788,7 @@ mod tests {
     /// one, the multiplier could be dropped on the floor and nothing would
     /// notice.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn softer_ground_erodes_faster_than_harder_ground() {
         let settings = ErosionSettings {
             hardness: crate::hardness::HardnessSettings {
@@ -749,7 +799,13 @@ mod tests {
         };
 
         let before = FlowNetwork::build(rough_slope()).filled().clone();
-        let (after, _, _) = erode(rough_slope(), 7, at_origin(), settings);
+        let (after, _, _) = erode(
+            rough_slope(),
+            7,
+            at_origin(),
+            settings,
+            &crate::flow::BoundarySeal::open(),
+        );
 
         let map = crate::hardness::HardnessMap::for_block(7, at_origin(), settings.hardness);
 
@@ -793,9 +849,16 @@ mod tests {
     /// lowered everything evenly would pass every test above while producing a
     /// surface that is merely shorter, not carved.
     #[test]
+    #[ignore = "block-scale; the worldgen gate runs every ignored test in release"]
     fn incision_follows_drainage_rather_than_being_uniform() {
         let before = FlowNetwork::build(rough_slope()).filled().clone();
-        let (after, network, _) = erode(rough_slope(), 7, at_origin(), TEST_SETTINGS);
+        let (after, network, _) = erode(
+            rough_slope(),
+            7,
+            at_origin(),
+            TEST_SETTINGS,
+            &crate::flow::BoundarySeal::open(),
+        );
 
         let mut channel_loss = (0.0f64, 0u32);
         let mut slope_loss = (0.0f64, 0u32);
